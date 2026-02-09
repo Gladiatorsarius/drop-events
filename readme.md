@@ -8,6 +8,18 @@ Server-only mod behavior: it runs entirely on the server and does not require an
 - Teleports the shulker to the display every tick.
 - If the shulker dies, the display drops its item and is removed.
 
+## Commands
+
+This mod exposes a simple server-only command to control an active drop-event display near the command source.
+
+- `/dropevent start` — Targets the nearest `minecraft:item_display` with the tag `drop_event_item`. If that display is linked to a guard shulker, the mod creates a ServerBossBar visible to all players.
+	- BossBar title format: `{Item Name} at {X, Y, Z}` (rounded integers from the display position).
+	- The BossBar lifecycle is tied to the linked shulker (the one referenced by the display tag `linked_shulker:<uuid>`).
+
+- `/dropevent stop` — Manually removes the BossBar for the targeted linked shulker, drops the linked display item, and cleans up the shulker/display entities.
+
+Automatic cleanup: when a `drop_event_shulker` dies, the mod automatically removes/hides the associated BossBar for all players and then drops the display's item.
+
 ## How to summon a tagged item display
 1) Summon an item display with an item:
 ```

@@ -17,7 +17,7 @@ final class DropEventShulkerDropListener {
 	}
 
 	static void register() {
-		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
+			ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
 			if (!(entity instanceof Shulker shulker)) {
 				return;
 			}
@@ -26,8 +26,10 @@ final class DropEventShulkerDropListener {
 				return;
 			}
 
-			removeVanillaDrops(shulker);
-			DropEventLinker.dropLinkedDisplayItem(shulker);
+				// Remove boss bar (if shown) for this shulker, then perform the normal drop handling
+				DropEventBossBarManager.removeForShulker(shulker);
+				removeVanillaDrops(shulker);
+				DropEventLinker.dropLinkedDisplayItem(shulker);
 		});
 	}
 

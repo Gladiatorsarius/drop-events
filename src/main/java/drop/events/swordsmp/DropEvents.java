@@ -1,6 +1,7 @@
 package drop.events.swordsmp;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +23,10 @@ public class DropEvents implements ModInitializer {
 		DropEventRules.register();
 		DropEventLinker.register();
 		DropEventShulkerDropListener.register();
+		// Register /dropevent commands
+		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+			DropEventCommand.register(dispatcher);
+		});
 		LOGGER.info("Drop Events server linker initialized.");
 	}
 }
