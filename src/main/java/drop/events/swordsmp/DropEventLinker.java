@@ -75,8 +75,7 @@ public final class DropEventLinker {
 			return;
 		}
 
-		Vec3 pos = guardAnchor(display);
-		shulker.teleportTo(pos.x, pos.y, pos.z);
+		teleportToDisplay(shulker, display.position());
 		configureShulker(world, shulker);
 		ensureLinkTag(shulker, TAG_LINKED_DISPLAY_PREFIX, display.getUUID());
 		ensureLinkTag(display, TAG_LINKED_SHULKER_PREFIX, shulker.getUUID());

@@ -9,6 +9,7 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Shulker;
+import net.minecraft.world.item.Items;
 
 final class DropEventShulkerDropListener {
 	private static final double DROP_RADIUS = 2.5;
@@ -41,7 +42,9 @@ final class DropEventShulkerDropListener {
 		List<ItemEntity> itemDrops = new ArrayList<>();
 		world.getEntities(EntityType.ITEM, entity -> entity.distanceTo(shulker) <= DROP_RADIUS, itemDrops);
 		for (ItemEntity drop : itemDrops) {
-			drop.discard();
+			if (drop.getItem().getItem() == Items.SHULKER_SHELL) {
+				drop.discard();
+			}
 		}
 
 		List<ExperienceOrb> xpDrops = new ArrayList<>();
