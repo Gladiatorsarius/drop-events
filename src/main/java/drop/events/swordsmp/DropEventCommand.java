@@ -40,8 +40,6 @@ public final class DropEventCommand {
 				return 0;
 			}
 
-			Vec3 pos = source.getPosition();
-			// find nearest item_display with tag drop_event_item
 			List<Display.ItemDisplay> displays = new ArrayList<>();
 			world.getEntities(EntityType.ITEM_DISPLAY, e -> e.getTags().contains(DropEventLinker.TAG_TRIGGER), displays);
 			if (displays.isEmpty()) {
@@ -49,35 +47,22 @@ public final class DropEventCommand {
 				return 0;
 			}
 
-			Display.ItemDisplay nearest = null;
-			double best = Double.MAX_VALUE;
-			for (Display.ItemDisplay d : displays) {
-				double dist = d.position().distanceToSqr(pos);
-				if (dist < best) {
-					best = dist;
-					nearest = d;
-				}
+			int activated = 0;
+			for (Display.ItemDisplay display : displays) {
+				UUID shulkerId = linkedShulkerUuidFromDisplay(display);
+				if (shulkerId == null) continue;
+				Entity linked = world.getEntity(shulkerId);
+				if (!(linked instanceof Shulker shulker)) continue;
+				DropEventBossBarManager.createBossBarForDisplay(world, display, shulker);
+				activated++;
 			}
 
-			if (nearest == null) {
-				source.sendFailure(Component.literal("No target display found"));
+			if (activated == 0) {
+				source.sendFailure(Component.literal("No valid linked shulkers found for displays."));
 				return 0;
 			}
-
-			UUID shulkerId = linkedShulkerUuidFromDisplay(nearest);
-			if (shulkerId == null) {
-				source.sendFailure(Component.literal("Target display is not linked to a guard shulker"));
-				return 0;
-			}
-
-			Entity linked = world.getEntity(shulkerId);
-			if (!(linked instanceof Shulker shulker)) {
-				source.sendFailure(Component.literal("Linked shulker not present"));
-				return 0;
-			}
-
-			DropEventBossBarManager.createBossBarForDisplay(world, nearest);
-			source.sendSuccess(() -> Component.literal("Drop event bossbar started"), true);
+			final int activatedCount = activated;
+			source.sendSuccess(() -> Component.literal("Activated bossbars for " + activatedCount + " drop event displays."), true);
 			return Command.SINGLE_SUCCESS;
 		} catch (Exception e) {
 			context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));

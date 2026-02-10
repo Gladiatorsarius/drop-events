@@ -21,14 +21,10 @@ This mod exposes a simple server-only command to control an active drop-event di
 Automatic cleanup: when a `drop_event_shulker` dies, the mod automatically removes/hides the associated BossBar for all players and then drops the display's item.
 
 ## How to summon a tagged item display
-1) Summon an item display with an item:
-```
-/summon minecraft:item_display ~ ~ ~ {item:{id:"minecraft:diamond",count:1}}
-```
+1) Summon an item display with an item and the Tag: drop_event_item :
 
-2) Add the scoreboard tag:
 ```
-/tag @e[type=minecraft:item_display,sort=nearest,limit=1] add drop_event_item
+/summon item_display ~ ~ ~ {Tags:["drop_event_item"],item:{id:"minecraft:diamond",count:1}}
 ```
 
 The shulker should spawn and follow the display.

@@ -2,6 +2,7 @@ package drop.events.swordsmp;
 
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +28,8 @@ public class DropEvents implements ModInitializer {
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			DropEventCommand.register(dispatcher);
 		});
+		// Update all bossbar progress every server tick
+		ServerTickEvents.END_SERVER_TICK.register(server -> DropEventBossBarManager.updateAllBossBarProgress());
 		LOGGER.info("Drop Events server linker initialized.");
 	}
 }
