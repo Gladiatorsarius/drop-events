@@ -25,7 +25,6 @@ public final class DropEventLinker {
 	public static final String TAG_SHULKER = "drop_event_shulker";
 	private static final String TAG_LINKED_DISPLAY_PREFIX = "linked_display:";
 	private static final String TAG_LINKED_SHULKER_PREFIX = "linked_shulker:";
-	private static final float SHULKER_MAX_HEALTH = 1000.0f;
 	private static final double GUARD_VERTICAL_OFFSET = -1.0;
 	private static final double DISPLAY_LINK_OFFSET = -0.5;
 
@@ -77,9 +76,13 @@ public final class DropEventLinker {
 
 		teleportToDisplay(shulker, display.position());
 		configureShulker(world, shulker);
+
+		// ✅ Apply gamerule-based health ONLY here
+		applyHealth(world, shulker);
+
 		ensureLinkTag(shulker, TAG_LINKED_DISPLAY_PREFIX, display.getUUID());
 		ensureLinkTag(display, TAG_LINKED_SHULKER_PREFIX, shulker.getUUID());
-		applyHealth(shulker);
+
 		world.addFreshEntity(shulker);
 		teleportDisplayToShulker(display, shulker);
 	}
@@ -100,12 +103,15 @@ public final class DropEventLinker {
 		return new Vec3(pos.x, pos.y + GUARD_VERTICAL_OFFSET, pos.z);
 	}
 
-	private static void applyHealth(LivingEntity entity) {
+	// ✅ Uses gamerule instead of constant
+	private static void applyHealth(ServerLevel world, LivingEntity entity) {
+		int health = world.getGameRules().getInt(DropEventRules.SHULKER_HEALTH);
+
 		AttributeInstance maxHealth = entity.getAttribute(Attributes.MAX_HEALTH);
 		if (maxHealth != null) {
-			maxHealth.setBaseValue(SHULKER_MAX_HEALTH);
+			maxHealth.setBaseValue(health);
 		}
-		entity.setHealth(SHULKER_MAX_HEALTH);
+		entity.setHealth(health);
 	}
 
 	private static void dropDisplayItemAndRemove(ServerLevel world, Display.ItemDisplay display) {
