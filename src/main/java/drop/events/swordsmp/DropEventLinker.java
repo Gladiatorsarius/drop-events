@@ -105,7 +105,7 @@ public final class DropEventLinker {
 
 	// ✅ Uses gamerule instead of constant
 	private static void applyHealth(ServerLevel world, LivingEntity entity) {
-		int health = world.getGameRules().getInt(DropEventRules.SHULKER_HEALTH);
+		int health = world.getGameRules().get(DropEventRules.SHULKER_HEALTH);
 
 		AttributeInstance maxHealth = entity.getAttribute(Attributes.MAX_HEALTH);
 		if (maxHealth != null) {

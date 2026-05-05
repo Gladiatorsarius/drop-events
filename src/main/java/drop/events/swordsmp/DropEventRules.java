@@ -27,7 +27,7 @@ public final class DropEventRules {
 		}
 
 		if (SHULKER_HEALTH == null) {
-			SHULKER_HEALTH = GameRuleBuilder.forInt(1000) // default = 1000
+			SHULKER_HEALTH = GameRuleBuilder.forInteger(1000) // default = 1000
 				.category(GameRuleCategory.MOBS)
 				.buildAndRegister(
 					Identifier.fromNamespaceAndPath(DropEvents.MOD_ID, "shulker_health")
