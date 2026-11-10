@@ -1,3 +1,12 @@
+# Xaero waypoint sharing (1.4.0)
+
+- `/dropevent start` broadcasts a Xaero chat waypoint for each newly created bossbar. Repeated start of an active bar does not resend it.
+- The token uses a bounded generic title; item names stay in the chat line as components for client localization. Names are checked after Xaero's section-code stripping. A custom name containing the reserved `xaero-waypoint:` prefix uses a full-width colon there to avoid confusing the client parser.
+- Modded dimension IDs mirror Xaero 26.6.2 escaping, including hyphens and whole-path trailing dots.
+- The message is built before bar creation so build failures can be retried. A send failure after creation may still leave the bar active without a share; no new retry state is added.
+- Coordinates are the display's block position, including negative-coordinate flooring, and the token carries the event dimension.
+- Manual checks remain: actual Xaero client recognition/click/save, localized names, cross-dimension shares, multiple events, repeated start, and clients without Xaero. No automatic waypoint deletion is promised.
+
 # Review fixes (1.2.3)
 
 ## Guard death deleted unrelated shells and XP
