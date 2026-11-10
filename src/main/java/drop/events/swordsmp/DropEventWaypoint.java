@@ -4,24 +4,17 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
-/** Builds Xaero's ten-field chat share token, which must end the message. */
+/** Builds Xaero's ten-field chat share token, sent alone as the whole message. */
 public final class DropEventWaypoint {
 	private DropEventWaypoint() {}
 
-	public static Component waypointMessage(ItemStack stack, BlockPos pos, ResourceKey<Level> dimension) {
-		Component name = stack.getHoverName();
-		// Xaero strips section-sign formatting pairs before scanning for its FIRST
-		// token. Check that normalized text so formatting cannot hide a prefix.
-		String normalizedName = name.getString().replaceAll("§.", "");
-		if (normalizedName.contains("xaero-waypoint:")) {
-			name = Component.literal(normalizedName.replace("§", "").replace("xaero-waypoint:", "xaero-waypoint："));
-		}
-		return Component.literal("Drop event of ").append(name)
-			.append(Component.literal(" at " + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + " | "))
-			.append(Component.literal(waypointToken(pos, dimension)));
+	public static Component waypointMessage(BlockPos pos, ResourceKey<Level> dimension) {
+		// Token-only: Xaero hides any chat line containing its token and replaces
+		// it with its own share message, so extra text would only reach players
+		// without Xaero. The item name stays visible in the bossbar title.
+		return Component.literal(waypointToken(pos, dimension));
 	}
 
 	static String waypointToken(BlockPos pos, ResourceKey<Level> dimension) {

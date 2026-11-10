@@ -55,8 +55,7 @@ public final class DropEventCommand {
 				if (!(linked instanceof Shulker shulker)) continue;
 				// Build before bar creation so a failed message cannot leave an
 				// active bar that suppresses the next start's announcement.
-				Component waypoint = DropEventWaypoint.waypointMessage(
-					display.getItemStack(), display.blockPosition(), world.dimension());
+				Component waypoint = DropEventWaypoint.waypointMessage(display.blockPosition(), world.dimension());
 				if (DropEventBossBarManager.createBossBarForDisplay(world, display, shulker)) {
 					world.getServer().getPlayerList().broadcastSystemMessage(
 						waypoint, false);
