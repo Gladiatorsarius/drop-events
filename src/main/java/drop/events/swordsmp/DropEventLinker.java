@@ -1,11 +1,15 @@
 package drop.events.swordsmp;
 
 import java.util.ArrayList;
-import java.util.List;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Display;
@@ -27,11 +31,30 @@ public final class DropEventLinker {
 	private static final String TAG_LINKED_SHULKER_PREFIX = "linked_shulker:";
 	private static final double GUARD_VERTICAL_OFFSET = -1.0;
 	private static final double DISPLAY_LINK_OFFSET = -0.5;
+	private static final Map<ServerLevel, Set<Display.ItemDisplay>> DISPLAYS = new HashMap<>();
 
 	private DropEventLinker() {
 	}
 
 	public static void register() {
+		// Track every loaded display, not just tagged ones: /tag changes must work immediately.
+		ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+			if (entity instanceof Display.ItemDisplay display) {
+				DISPLAYS.computeIfAbsent(world, ignored -> new HashSet<>()).add(display);
+			}
+		});
+		ServerEntityEvents.ENTITY_UNLOAD.register((entity, world) -> {
+			if (entity instanceof Display.ItemDisplay display) {
+				Set<Display.ItemDisplay> displays = DISPLAYS.get(world);
+				if (displays != null) {
+					displays.remove(display);
+					if (displays.isEmpty()) DISPLAYS.remove(world);
+				}
+				var reason = display.getRemovalReason();
+				if (reason != null && reason.shouldDestroy()) removeGuardForDisplay(world, display);
+			}
+		});
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> DISPLAYS.clear());
 		ServerTickEvents.END_SERVER_TICK.register(DropEventLinker::tickServer);
 	}
 
@@ -42,11 +65,11 @@ public final class DropEventLinker {
 	}
 
 	private static void tickWorld(ServerLevel world) {
-		List<Display.ItemDisplay> displays = new ArrayList<>();
-		world.getEntities(EntityType.ITEM_DISPLAY, display -> display.getTags().contains(TAG_TRIGGER), displays);
-
-		for (Display.ItemDisplay display : displays) {
-			handleDisplay(world, display);
+		Set<Display.ItemDisplay> displays = DISPLAYS.get(world);
+		if (displays == null) return;
+		// Handling can discard a display and synchronously fire ENTITY_UNLOAD.
+		for (Display.ItemDisplay display : new ArrayList<>(displays)) {
+			if (!display.isRemoved() && display.getTags().contains(TAG_TRIGGER)) handleDisplay(world, display);
 		}
 	}
 
@@ -93,9 +116,15 @@ public final class DropEventLinker {
 		display.setDeltaMovement(0.0, 0.0, 0.0);
 	}
 
-	private static void teleportToDisplay(LivingEntity shulker, Vec3 pos) {
-		shulker.teleportTo(pos.x, pos.y, pos.z);
-		shulker.setDeltaMovement(0.0, 0.0, 0.0);
+	private static void teleportToDisplay(Shulker shulker, Vec3 pos) {
+		// Shulker.setPos snaps to block centers unless it is riding another entity.
+		double x = shulker.isPassenger() ? pos.x : Math.floor(pos.x) + 0.5;
+		double y = shulker.isPassenger() ? pos.y : Math.floor(pos.y + 0.5);
+		double z = shulker.isPassenger() ? pos.z : Math.floor(pos.z) + 0.5;
+		if (shulker.getX() != x || shulker.getY() != y || shulker.getZ() != z) {
+			shulker.teleportTo(pos.x, pos.y, pos.z);
+		}
+		if (shulker.getDeltaMovement().lengthSqr() != 0) shulker.setDeltaMovement(0.0, 0.0, 0.0);
 	}
 
 	private static Vec3 guardAnchor(Display.ItemDisplay display) {
@@ -139,22 +168,39 @@ public final class DropEventLinker {
 
 	private static void ensureLinkTag(Entity entity, String prefix, UUID uuid) {
 		Set<String> tags = entity.getTags();
+		String expected = prefix + uuid;
+		if (tags.contains(expected) && tags.stream().filter(tag -> tag.startsWith(prefix)).count() == 1) return;
 		for (String tag : new ArrayList<>(tags)) {
-			if (tag.startsWith(prefix) && !tag.equals(prefix + uuid)) {
+			if (tag.startsWith(prefix) && !tag.equals(expected)) {
 				entity.removeTag(tag);
 			}
 		}
-		entity.addTag(prefix + uuid);
+		entity.addTag(expected);
 	}
 
 	private static void configureShulker(ServerLevel world, Shulker shulker) {
-		shulker.setNoGravity(true);
-		shulker.setNoAi(true);
-		shulker.setSilent(true);
+		if (!shulker.isNoGravity()) shulker.setNoGravity(true);
+		if (!shulker.isNoAi()) shulker.setNoAi(true);
+		if (!shulker.isSilent()) shulker.setSilent(true);
 		boolean shouldRenderModel = Boolean.TRUE.equals(world.getGameRules().get(DropEventRules.GUARD_VISIBLE));
-		shulker.setInvisible(!shouldRenderModel);
+		if (shulker.isInvisible() == shouldRenderModel) shulker.setInvisible(!shouldRenderModel);
 		if (!shulker.getTags().contains(TAG_SHULKER)) {
 			shulker.addTag(TAG_SHULKER);
+		}
+	}
+
+	static UUID linkedShulkerUuidFromDisplay(Display.ItemDisplay display) {
+		return getLinkedUuid(display, TAG_LINKED_SHULKER_PREFIX);
+	}
+
+	private static void removeGuardForDisplay(ServerLevel world, Display.ItemDisplay display) {
+		UUID id = linkedShulkerUuidFromDisplay(display);
+		Entity entity = id == null ? null : world.getEntity(id);
+		if (entity instanceof Shulker shulker && shulker.isAlive()
+				&& shulker.getTags().contains(TAG_SHULKER)
+				&& display.getUUID().equals(getLinkedUuid(shulker, TAG_LINKED_DISPLAY_PREFIX))) {
+			DropEventBossBarManager.removeForShulker(shulker);
+			shulker.discard();
 		}
 	}
 
