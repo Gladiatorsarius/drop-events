@@ -20,6 +20,7 @@
 - Repro: Permanently remove a linked display without killing its guard.
 - Fix: On permanent display removal, discard its living guard only if both entities' link tags agree and the guard has the event tag. Normal chunk unload does not destroy guards.
 - Tested: Unit regressions for permanent removal, chunk unload and wrong-owner safety. In-game chunk unload/reload remains to check.
+- Known limitation: If the guard is already in an unloaded chunk when the display is permanently removed, it cannot be found for immediate cleanup. This fix does not force-load chunks or redesign persistent event tracking.
 
 ## Avoidable per-tick work
 - Bug: The linker scanned all loaded entities for item displays every tick, then repeatedly copied/re-added unchanged tags, reapplied flags and teleported stationary guards.
