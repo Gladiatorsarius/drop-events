@@ -38,9 +38,11 @@ public final class DropEventBossBarManager {
 		});
 	}
 
-	public static void createBossBarForDisplay(ServerLevel world, Display.ItemDisplay display, Shulker shulker) {
+	/** Returns true only when a new bar is created, not on a repeated start. */
+	public static boolean createBossBarForDisplay(ServerLevel world, Display.ItemDisplay display, Shulker shulker) {
 		UUID id = shulker.getUUID();
 		TrackedBar tracked = BARS.get(id);
+		boolean created = tracked == null;
 		if (tracked == null) {
 			ServerBossEvent bar = new ServerBossEvent(title(display), BossEvent.BossBarColor.PURPLE, BossEvent.BossBarOverlay.PROGRESS);
 			tracked = new TrackedBar(shulker, bar);
@@ -50,6 +52,7 @@ public final class DropEventBossBarManager {
 		}
 		updateProgress(tracked);
 		for (var player : world.getServer().getPlayerList().getPlayers()) tracked.bar().addPlayer(player);
+		return created;
 	}
 
 	public static void removeForShulker(Shulker shulker) {

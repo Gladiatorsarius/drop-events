@@ -2,6 +2,13 @@ package drop.events.swordsmp;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.entity.EntityType;
+import org.mockito.ArgumentCaptor;
 import com.mojang.brigadier.CommandDispatcher;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.permissions.LevelBasedPermissionSet;
@@ -86,6 +93,7 @@ class DropEventRegressionTest {
 		ServerPlayer joining = player();
 		ServerPlayConnectionEvents.JOIN.invoker().onPlayReady(joining.connection, null, server);
 		verify(joining.connection).send(any());
+		verify(server.getPlayerList(), never()).broadcastSystemMessage(any(Component.class), anyBoolean());
 	}
 
 	@Test void fallbackCleanupSendsRemove() {
@@ -232,4 +240,129 @@ class DropEventRegressionTest {
 		verify(guard, never()).addTag(anyString());
 		verify(guard, never()).removeTag(anyString());
 	}
+	@Test void waypointMessageKeepsLocalizedNameAndTerminalTenFieldToken() {
+		String message = DropEventWaypoint.waypointMessage(new ItemStack(Items.DIAMOND_SWORD), new BlockPos(100, 64, -20), Level.NETHER).getString();
+		assertTrue(message.startsWith("Drop event of Diamond Sword at 100, 64, -20 | "));
+		String token = message.substring(message.indexOf("xaero-waypoint:"));
+		assertEquals("xaero-waypoint:Drop event:D:100:64:-20:6:false:0:Internal-the-nether-waypoints", token);
+		assertEquals(10, token.split(":").length);
+	}
+
+	@Test void waypointPreservesTranslatableAndStyledCustomComponents() {
+		ItemStack plain = new ItemStack(Items.DIAMOND_SWORD);
+		Component message = DropEventWaypoint.waypointMessage(plain, BlockPos.ZERO, Level.OVERWORLD);
+		assertEquals(plain.getHoverName(), message.getSiblings().getFirst());
+		assertInstanceOf(net.minecraft.network.chat.contents.TranslatableContents.class, message.getSiblings().getFirst().getContents());
+		ItemStack custom = new ItemStack(Items.STICK);
+		custom.set(DataComponents.CUSTOM_NAME, Component.literal("Gladi's ")
+			.withStyle(net.minecraft.ChatFormatting.GOLD).append(Component.translatable("item.minecraft.diamond")));
+		Component namedMessage = DropEventWaypoint.waypointMessage(custom, BlockPos.ZERO, Level.OVERWORLD);
+		assertEquals(custom.getHoverName(), namedMessage.getSiblings().getFirst());
+		assertTrue(namedMessage.getString().endsWith("xaero-waypoint:Drop event:D:0:0:0:6:false:0:Internal-overworld-waypoints"));
+	}
+
+	@Test void customNamesCannotCorruptOrImpersonateToken() {
+		ItemStack stack = new ItemStack(Items.STICK);
+		stack.set(DataComponents.CUSTOM_NAME, Component.literal("xaero-waypoint:Bad:Name " + "very long ".repeat(30)));
+		String message = DropEventWaypoint.waypointMessage(stack, BlockPos.ZERO, Level.END).getString();
+		assertTrue(message.contains("Bad:Name"));
+		assertEquals(message.indexOf("xaero-waypoint:"), message.lastIndexOf("xaero-waypoint:"));
+		assertEquals("xaero-waypoint:Drop event:D:0:0:0:6:false:0:Internal-the-end-waypoints", message.substring(message.indexOf("xaero-waypoint:")));
+	}
+
+	@Test void formattingCannotReconstructFakeWaypointPrefix() {
+		for (String name : List.of("xaero§r-waypoint:forged", "§axaero-§bwaypoint:forged", "xaero-way§rpoint:forged", "xaero§r-waypoint:forged xaero§§rr-waypoint:other")) {
+			ItemStack stack = new ItemStack(Items.STICK);
+			stack.set(DataComponents.CUSTOM_NAME, Component.literal(name));
+			String rendered = DropEventWaypoint.waypointMessage(stack, BlockPos.ZERO, Level.OVERWORLD)
+				.getString().replaceAll("§.", "");
+			assertEquals(rendered.indexOf("xaero-waypoint:"), rendered.lastIndexOf("xaero-waypoint:"));
+			assertTrue(rendered.substring(rendered.indexOf("xaero-waypoint:")).startsWith("xaero-waypoint:Drop event:D:"));
+		}
+	}
+
+	@Test void failedMessageBuildDoesNotActivateBarAndCanBeRetried() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		CommandSourceStack source = startSource(List.of(display));
+		// startSource stubs the dimension; apply the failure after its setup.
+		when(world.dimension()).thenThrow(new IllegalStateException("test message failure")).thenReturn(Level.OVERWORLD);
+		assertEquals(0, runStart(source));
+		verify(server.getPlayerList(), never()).broadcastSystemMessage(any(Component.class), anyBoolean());
+		assertEquals(1, runStart(source));
+		verify(server.getPlayerList()).broadcastSystemMessage(any(Component.class), eq(false));
+	}
+
+	@Test void waypointDimensionEncodingHandlesAllVanillaAndModdedPaths() {
+		assertEquals("overworld", DropEventWaypoint.xaeroDimension(Level.OVERWORLD.identifier()));
+		assertEquals("the-nether", DropEventWaypoint.xaeroDimension(Level.NETHER.identifier()));
+		assertEquals("the-end", DropEventWaypoint.xaeroDimension(Level.END.identifier()));
+		assertEquals("dim%mymod$deep^min^dark", DropEventWaypoint.xaeroDimension(Identifier.fromNamespaceAndPath("mymod", "deep-dark")));
+		assertEquals("dim%my^min^mod$deep-dark%cave,,", DropEventWaypoint.xaeroDimension(Identifier.fromNamespaceAndPath("my-mod", "deep_dark/cave..")));
+		assertEquals("dim%mymod$inner.%cave,", DropEventWaypoint.xaeroDimension(Identifier.fromNamespaceAndPath("mymod", "inner./cave.")));
+		assertEquals("dim%mymod$deep-dark%cave", DropEventWaypoint.xaeroDimension(Identifier.fromNamespaceAndPath("mymod", "deep_dark/cave")));
+	}
+
+	private CommandSourceStack startSource(List<Display.ItemDisplay> displays) {
+		CommandSourceStack source = mock(CommandSourceStack.class);
+		when(source.getLevel()).thenReturn(world);
+		when(source.permissions()).thenReturn(LevelBasedPermissionSet.forLevel(PermissionLevel.GAMEMASTERS));
+		when(world.dimension()).thenReturn(Level.NETHER);
+		doAnswer(invocation -> {
+			List<Display.ItemDisplay> found = invocation.getArgument(2);
+			found.addAll(displays);
+			return null;
+		}).when(world).getEntities(eq(EntityType.ITEM_DISPLAY), any(), any(List.class));
+		return source;
+	}
+
+	private int runStart(CommandSourceStack source) throws Exception {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+		DropEventCommand.register(dispatcher);
+		return dispatcher.execute("dropevent start", source);
+	}
+
+	@Test void startAnnouncesEachNewBarOnlyOnceWithEventPositionAndDimension() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.containing(10.5, 65, -20.5));
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.DIAMOND));
+		Display.ItemDisplay second = mock(Display.ItemDisplay.class);
+		Shulker otherGuard = mock(Shulker.class);
+		UUID otherId = UUID.randomUUID();
+		when(otherGuard.getUUID()).thenReturn(otherId);
+		when(otherGuard.getMaxHealth()).thenReturn(1000f);
+		when(second.getTags()).thenReturn(Set.of("linked_shulker:" + otherId));
+		when(second.getItemStack()).thenReturn(new ItemStack(Items.STICK));
+		when(second.blockPosition()).thenReturn(new BlockPos(1, 2, 3));
+		when(world.getEntity(otherId)).thenReturn(otherGuard);
+		CommandSourceStack source = startSource(List.of(display, second));
+		assertEquals(1, runStart(source));
+		assertEquals(1, runStart(source));
+		ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
+		verify(server.getPlayerList(), times(2)).broadcastSystemMessage(messages.capture(), eq(false));
+		assertTrue(messages.getAllValues().get(0).getString().endsWith("xaero-waypoint:Drop event:D:10:65:-21:6:false:0:Internal-the-nether-waypoints"));
+		assertTrue(messages.getAllValues().get(1).getString().contains("Drop event of Stick at 1, 2, 3"));
+	}
+
+	@Test void startWithoutValidLinkedGuardDoesNotAnnounce() throws Exception {
+		CommandSourceStack source = startSource(List.of(display));
+		assertEquals(0, runStart(source));
+		verify(server.getPlayerList(), never()).broadcastSystemMessage(any(Component.class), anyBoolean());
+	}
+
+	@Test void startWithoutDisplaysDoesNotAnnounce() throws Exception {
+		assertEquals(0, runStart(startSource(List.of())));
+		verify(server.getPlayerList(), never()).broadcastSystemMessage(any(Component.class), anyBoolean());
+	}
+
+	@Test void removedBarCanAnnounceAgainAfterRestart() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		CommandSourceStack source = startSource(List.of(display));
+		assertEquals(1, runStart(source));
+		DropEventBossBarManager.removeForShulker(guard);
+		assertEquals(1, runStart(source));
+		verify(server.getPlayerList(), times(2)).broadcastSystemMessage(any(Component.class), eq(false));
+	}
+
 }

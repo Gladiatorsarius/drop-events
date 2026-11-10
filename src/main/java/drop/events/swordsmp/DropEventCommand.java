@@ -53,7 +53,14 @@ public final class DropEventCommand {
 				if (shulkerId == null) continue;
 				Entity linked = world.getEntity(shulkerId);
 				if (!(linked instanceof Shulker shulker)) continue;
-				DropEventBossBarManager.createBossBarForDisplay(world, display, shulker);
+				// Build before bar creation so a failed message cannot leave an
+				// active bar that suppresses the next start's announcement.
+				Component waypoint = DropEventWaypoint.waypointMessage(
+					display.getItemStack(), display.blockPosition(), world.dimension());
+				if (DropEventBossBarManager.createBossBarForDisplay(world, display, shulker)) {
+					world.getServer().getPlayerList().broadcastSystemMessage(
+						waypoint, false);
+				}
 				activated++;
 			}
 
