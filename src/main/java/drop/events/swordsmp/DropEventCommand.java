@@ -23,7 +23,8 @@ public final class DropEventCommand {
 	private DropEventCommand() {}
 
 	public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
-		var root = Commands.literal("dropevent");
+		var root = Commands.literal("dropevent")
+			.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS));
 
 		root.then(Commands.literal("start").executes(DropEventCommand::start));
 		root.then(Commands.literal("stop").executes(DropEventCommand::stop));

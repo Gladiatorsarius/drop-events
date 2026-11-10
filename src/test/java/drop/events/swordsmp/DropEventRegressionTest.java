@@ -2,6 +2,10 @@ package drop.events.swordsmp;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import com.mojang.brigadier.CommandDispatcher;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.server.permissions.LevelBasedPermissionSet;
+import net.minecraft.server.permissions.PermissionLevel;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -185,6 +189,19 @@ class DropEventRegressionTest {
 		tags.add(DropEventLinker.TAG_TRIGGER);
 		ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
 		verify(guard).setNoAi(true);
+	}
+
+	@Test void commandsRequireOperatorLevelTwoAndKeepBothSubcommands() {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+		DropEventCommand.register(dispatcher);
+		var root = dispatcher.getRoot().getChild("dropevent");
+		assertNotNull(root.getChild("start"));
+		assertNotNull(root.getChild("stop"));
+		for (int level = 0; level <= 4; level++) {
+			CommandSourceStack source = mock(CommandSourceStack.class);
+			when(source.permissions()).thenReturn(LevelBasedPermissionSet.forLevel(PermissionLevel.byId(level)));
+			assertEquals(level >= 2, root.canUse(source), "operator level " + level);
+		}
 	}
 
 	private void link() {
