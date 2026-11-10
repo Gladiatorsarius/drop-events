@@ -37,3 +37,10 @@
 - Baseline and changed project build with JDK 25 (as CI uses), Gradle 9.3 and Java release 21.
 - 13 JUnit/Mockito regression tests pass. They use real Minecraft/Fabric classes with mocked world/player objects, not a running game.
 - No unrelated scaffolding removal or gameplay redesign.
+
+## Follow-up: administrative commands were unrestricted (1.2.4)
+- Bug: Any player could start event bossbars or stop an event and release its loot, even far away in the same loaded dimension.
+- Cause: The command root had no permission requirement.
+- Repro: Run `/dropevent stop` as a non-operator with an event loaded.
+- Fix: Require the Minecraft 1.21.11 gamemaster permission (operator level 2) on the command root, covering both start and stop. Approved by the maintainer. Start-all/stop-nearest semantics are unchanged.
+- Tested: Command-tree regression checks levels 0 and 1 cannot use the root, while levels 2, 3 and 4 can, and both subcommands remain under the gated root. Full build and existing lifecycle/reward regressions pass. In-game operator/non-operator command visibility and console invocation remain manual checks.

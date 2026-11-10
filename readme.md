@@ -10,7 +10,7 @@ Server-only mod behavior: it runs entirely on the server and does not require an
 
 ## Commands
 
-This mod exposes a simple server-only command to control an active drop-event display near the command source.
+The `/dropevent start` and `/dropevent stop` commands require operator permission level 2 (gamemaster) or higher. Console and other sources with equivalent permission can also use them.
 
 - `/dropevent start` - Activates a bossbar for every loaded `minecraft:item_display` with the tag `drop_event_item` in the command source's dimension that has a linked guard shulker. The bars are visible to all players, including players who join later.
 	- BossBar title format: `{Item Name} at {X, Y, Z}` (rounded integers from the display position).
