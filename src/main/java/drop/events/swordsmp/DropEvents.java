@@ -22,6 +22,7 @@ public class DropEvents implements ModInitializer {
 		// Proceed with mild caution.
 
 		DropEventRules.register();
+		DropEventBossBarManager.register();
 		DropEventLinker.register();
 		DropEventShulkerDropListener.register();
 		// Register /dropevent commands
