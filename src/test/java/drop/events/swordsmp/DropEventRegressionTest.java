@@ -240,45 +240,22 @@ class DropEventRegressionTest {
 		verify(guard, never()).addTag(anyString());
 		verify(guard, never()).removeTag(anyString());
 	}
-	@Test void waypointMessageKeepsLocalizedNameAndTerminalTenFieldToken() {
-		String message = DropEventWaypoint.waypointMessage(new ItemStack(Items.DIAMOND_SWORD), new BlockPos(100, 64, -20), Level.NETHER).getString();
-		assertTrue(message.startsWith("Drop event of Diamond Sword at 100, 64, -20 | "));
-		String token = message.substring(message.indexOf("xaero-waypoint:"));
-		assertEquals("xaero-waypoint:Drop event:D:100:64:-20:6:false:0:Internal-the-nether-waypoints", token);
-		assertEquals(10, token.split(":").length);
+	@Test void waypointMessageIsTerminalTenFieldTokenOnly() {
+		String message = DropEventWaypoint.waypointMessage(new BlockPos(100, 64, -20), Level.NETHER).getString();
+		assertEquals("xaero-waypoint:Drop event:D:100:64:-20:6:false:0:Internal-the-nether-waypoints", message);
+		assertEquals(10, message.split(":").length);
 	}
 
-	@Test void waypointPreservesTranslatableAndStyledCustomComponents() {
-		ItemStack plain = new ItemStack(Items.DIAMOND_SWORD);
-		Component message = DropEventWaypoint.waypointMessage(plain, BlockPos.ZERO, Level.OVERWORLD);
-		assertEquals(plain.getHoverName(), message.getSiblings().getFirst());
-		assertInstanceOf(net.minecraft.network.chat.contents.TranslatableContents.class, message.getSiblings().getFirst().getContents());
-		ItemStack custom = new ItemStack(Items.STICK);
-		custom.set(DataComponents.CUSTOM_NAME, Component.literal("Gladi's ")
-			.withStyle(net.minecraft.ChatFormatting.GOLD).append(Component.translatable("item.minecraft.diamond")));
-		Component namedMessage = DropEventWaypoint.waypointMessage(custom, BlockPos.ZERO, Level.OVERWORLD);
-		assertEquals(custom.getHoverName(), namedMessage.getSiblings().getFirst());
-		assertTrue(namedMessage.getString().endsWith("xaero-waypoint:Drop event:D:0:0:0:6:false:0:Internal-overworld-waypoints"));
-	}
-
-	@Test void customNamesCannotCorruptOrImpersonateToken() {
-		ItemStack stack = new ItemStack(Items.STICK);
-		stack.set(DataComponents.CUSTOM_NAME, Component.literal("xaero-waypoint:Bad:Name " + "very long ".repeat(30)));
-		String message = DropEventWaypoint.waypointMessage(stack, BlockPos.ZERO, Level.END).getString();
-		assertTrue(message.contains("Bad:Name"));
-		assertEquals(message.indexOf("xaero-waypoint:"), message.lastIndexOf("xaero-waypoint:"));
-		assertEquals("xaero-waypoint:Drop event:D:0:0:0:6:false:0:Internal-the-end-waypoints", message.substring(message.indexOf("xaero-waypoint:")));
-	}
-
-	@Test void formattingCannotReconstructFakeWaypointPrefix() {
-		for (String name : List.of("xaero§r-waypoint:forged", "§axaero-§bwaypoint:forged", "xaero-way§rpoint:forged", "xaero§r-waypoint:forged xaero§§rr-waypoint:other")) {
-			ItemStack stack = new ItemStack(Items.STICK);
-			stack.set(DataComponents.CUSTOM_NAME, Component.literal(name));
-			String rendered = DropEventWaypoint.waypointMessage(stack, BlockPos.ZERO, Level.OVERWORLD)
-				.getString().replaceAll("§.", "");
-			assertEquals(rendered.indexOf("xaero-waypoint:"), rendered.lastIndexOf("xaero-waypoint:"));
-			assertTrue(rendered.substring(rendered.indexOf("xaero-waypoint:")).startsWith("xaero-waypoint:Drop event:D:"));
-		}
+	@Test void customItemNameDoesNotLeakIntoTokenOnlyAnnouncement() throws Exception {
+		link();
+		ItemStack forged = new ItemStack(Items.STICK);
+		forged.set(DataComponents.CUSTOM_NAME, Component.literal("xaero§r-waypoint:forged name"));
+		when(display.getItemStack()).thenReturn(forged);
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		assertEquals(1, runStart(startSource(List.of(display))));
+		ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
+		verify(server.getPlayerList()).broadcastSystemMessage(messages.capture(), eq(false));
+		assertEquals("xaero-waypoint:Drop event:D:0:0:0:6:false:0:Internal-the-nether-waypoints", messages.getValue().getString());
 	}
 
 	@Test void failedMessageBuildDoesNotActivateBarAndCanBeRetried() throws Exception {
@@ -340,8 +317,8 @@ class DropEventRegressionTest {
 		assertEquals(1, runStart(source));
 		ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
 		verify(server.getPlayerList(), times(2)).broadcastSystemMessage(messages.capture(), eq(false));
-		assertTrue(messages.getAllValues().get(0).getString().endsWith("xaero-waypoint:Drop event:D:10:65:-21:6:false:0:Internal-the-nether-waypoints"));
-		assertTrue(messages.getAllValues().get(1).getString().contains("Drop event of Stick at 1, 2, 3"));
+		assertEquals("xaero-waypoint:Drop event:D:10:65:-21:6:false:0:Internal-the-nether-waypoints", messages.getAllValues().get(0).getString());
+		assertEquals("xaero-waypoint:Drop event:D:1:2:3:6:false:0:Internal-the-nether-waypoints", messages.getAllValues().get(1).getString());
 	}
 
 	@Test void startWithoutValidLinkedGuardDoesNotAnnounce() throws Exception {

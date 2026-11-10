@@ -14,7 +14,7 @@ The `/dropevent start` and `/dropevent stop` commands require operator permissio
 
 - `/dropevent start` - Activates a bossbar for every loaded `minecraft:item_display` with the tag `drop_event_item` in the command source's dimension that has a linked guard shulker. The bars are visible to all players, including players who join later.
 	- BossBar title format: `{Item Name} at {X, Y, Z}` (rounded integers from the display position).
-	- When a new bar appears, all currently connected players receive a Xaero's Minimap chat waypoint. Repeating start for an already active bar does not resend it. The waypoint uses the display's block position and dimension, with the short title `Drop event`; the full item display name is shown in chat. Xaero's is optional on clients, not a server dependency.
+	- When a new bar appears, all currently connected players receive a Xaero's Minimap chat waypoint. Repeating start for an already active bar does not resend it. The waypoint uses the display's block position and dimension, with the short title `Drop event`; the chat announcement carries only the share token (Xaero clients see Xaero's own share message with its Add button instead), and the full item display name stays visible in the bossbar title. Xaero's is optional on clients, not a server dependency.
 	- Waypoints are chat shares, not automatically saved or removed markers. Joining later receives the bossbar but does not replay old waypoint messages. Unloading and restarting an event can announce it again.
 	- The BossBar lifecycle is tied to the linked shulker (the one referenced by the display tag `linked_shulker:<uuid>`).
 
