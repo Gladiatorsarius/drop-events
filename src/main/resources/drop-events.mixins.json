@@ -3,7 +3,8 @@
 	"package": "drop.events.swordsmp.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"mixins": [
-		"ExampleMixin"
+		"ExampleMixin",
+		"GuardLootMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
