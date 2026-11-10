@@ -13,7 +13,6 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
@@ -49,7 +48,7 @@ public final class DropEventCommand {
 
 			int activated = 0;
 			for (Display.ItemDisplay display : displays) {
-				UUID shulkerId = linkedShulkerUuidFromDisplay(display);
+				UUID shulkerId = DropEventLinker.linkedShulkerUuidFromDisplay(display);
 				if (shulkerId == null) continue;
 				Entity linked = world.getEntity(shulkerId);
 				if (!(linked instanceof Shulker shulker)) continue;
@@ -101,7 +100,7 @@ public final class DropEventCommand {
 				return 0;
 			}
 
-			UUID shulkerId = linkedShulkerUuidFromDisplay(nearest);
+			UUID shulkerId = DropEventLinker.linkedShulkerUuidFromDisplay(nearest);
 			if (shulkerId == null) {
 				source.sendFailure(Component.literal("Target display is not linked to a guard shulker"));
 				return 0;
@@ -118,7 +117,7 @@ public final class DropEventCommand {
 			}
 
 			// If shulker not present, try to remove bossbar by UUID
-			DropEventBossBarManager.removeForShulker(shulkerId, world);
+			DropEventBossBarManager.removeForShulker(shulkerId);
 			// also discard the display entity
 			nearest.discard();
 			source.sendSuccess(() -> Component.literal("Drop event stopped (shulker not present)"), true);
@@ -127,19 +126,6 @@ public final class DropEventCommand {
 			context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
 			return 0;
 		}
-	}
-
-	private static UUID linkedShulkerUuidFromDisplay(Display.ItemDisplay display) {
-		for (String tag : display.getTags()) {
-			if (tag.startsWith("linked_shulker:")) {
-				try {
-					return UUID.fromString(tag.substring("linked_shulker:".length()));
-				} catch (IllegalArgumentException ignored) {
-					return null;
-				}
-			}
-		}
-		return null;
 	}
 
 	// Helper to register via the Fabric callback from the mod initializer
