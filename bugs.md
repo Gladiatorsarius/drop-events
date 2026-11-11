@@ -38,6 +38,11 @@
 - 13 JUnit/Mockito regression tests pass. They use real Minecraft/Fabric classes with mocked world/player objects, not a running game.
 - No unrelated scaffolding removal or gameplay redesign.
 
+## Feature: /dropevent summon (1.1.0)
+- Feature: `/dropevent summon [<item>]` creates the tagged event display directly instead of requiring a manual `/summon ... {Tags:["drop_event_item"],...}` NBT command. The item argument uses the vanilla item parser, so modded items and components work with tab-completion. Without an argument it copies one item from the executor's main hand without consuming it; an empty main hand or a non-entity source fails with an error.
+- Notes: Summoning only creates the display at the command source's position; guard linking stays with the existing ticker and bossbar activation with `/dropevent start`. The command sits under the existing operator-level-2 root.
+- Tested: Command-tree and execution regressions for argument and main-hand paths, empty-hand/console failures and permission levels. In-game summon behavior remains a manual check.
+
 ## Follow-up: administrative commands were unrestricted (1.0.2)
 - Bug: Any player could start event bossbars or stop an event and release its loot, even far away in the same loaded dimension.
 - Cause: The command root had no permission requirement.

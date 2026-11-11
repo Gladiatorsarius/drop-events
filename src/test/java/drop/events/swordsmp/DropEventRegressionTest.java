@@ -2,7 +2,9 @@ package drop.events.swordsmp;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
+import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.permissions.LevelBasedPermissionSet;
 import net.minecraft.server.permissions.PermissionLevel;
@@ -14,6 +16,9 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.SharedConstants;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -24,9 +29,11 @@ import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.monster.Shulker;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.gamerules.GameRules;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedConstruction;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
@@ -41,6 +48,7 @@ import static org.mockito.ArgumentMatchers.any;
 class DropEventRegressionTest {
 	private MinecraftServer server;
 	private ServerLevel world;
+	private PlayerList players;
 	private Display.ItemDisplay display;
 	private Shulker guard;
 	private ServerPlayer player;
@@ -56,7 +64,8 @@ class DropEventRegressionTest {
 		server = mock(MinecraftServer.class);
 		world = mock(ServerLevel.class);
 		when(world.getServer()).thenReturn(server);
-		PlayerList players = mock(PlayerList.class);
+		when(world.enabledFeatures()).thenReturn(FeatureFlags.REGISTRY.allFlags());
+		players = mock(PlayerList.class);
 		when(server.getPlayerList()).thenReturn(players);
 		player = player();
 		when(players.getPlayers()).thenReturn(List.of(player));
@@ -79,6 +88,19 @@ class DropEventRegressionTest {
 		p.connection = mock(ServerGamePacketListenerImpl.class);
 		when(p.connection.getPlayer()).thenReturn(p);
 		return p;
+	}
+
+	private static CommandBuildContext buildContext() {
+		return CommandBuildContext.simple(RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY), FeatureFlags.REGISTRY.allFlags());
+	}
+
+	private CommandSourceStack operatorSource() {
+		CommandSourceStack source = mock(CommandSourceStack.class);
+		when(source.permissions()).thenReturn(LevelBasedPermissionSet.forLevel(PermissionLevel.byId(2)));
+		when(source.getLevel()).thenReturn(world);
+		when(source.getPosition()).thenReturn(new Vec3(10.5, 65.0, -20.5));
+		when(source.getServer()).thenReturn(server);
+		return source;
 	}
 
 	@Test void lateJoinReceivesExistingBar() {
@@ -191,17 +213,81 @@ class DropEventRegressionTest {
 		verify(guard).setNoAi(true);
 	}
 
-	@Test void commandsRequireOperatorLevelTwoAndKeepBothSubcommands() {
+	@Test void commandsRequireOperatorLevelTwoAndKeepAllSubcommands() {
 		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
-		DropEventCommand.register(dispatcher);
+		DropEventCommand.register(dispatcher, buildContext());
 		var root = dispatcher.getRoot().getChild("dropevent");
 		assertNotNull(root.getChild("start"));
 		assertNotNull(root.getChild("stop"));
+		assertNotNull(root.getChild("summon"));
+		assertNotNull(root.getChild("summon").getChild("item"));
 		for (int level = 0; level <= 4; level++) {
 			CommandSourceStack source = mock(CommandSourceStack.class);
 			when(source.permissions()).thenReturn(LevelBasedPermissionSet.forLevel(PermissionLevel.byId(level)));
 			assertEquals(level >= 2, root.canUse(source), "operator level " + level);
 		}
+	}
+
+	@Test void summonWithItemSpawnsTaggedDisplay() throws Exception {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+		DropEventCommand.register(dispatcher, buildContext());
+		CommandSourceStack source = operatorSource();
+
+		int result = dispatcher.execute("dropevent summon minecraft:diamond", source);
+
+		assertEquals(Command.SINGLE_SUCCESS, result);
+		ArgumentCaptor<Entity> spawned = ArgumentCaptor.forClass(Entity.class);
+		verify(world).addFreshEntity(spawned.capture());
+		Display.ItemDisplay spawnedDisplay = (Display.ItemDisplay) spawned.getValue();
+		assertTrue(spawnedDisplay.getTags().contains(DropEventLinker.TAG_TRIGGER));
+		assertTrue(spawnedDisplay.getItemStack().is(Items.DIAMOND));
+		assertEquals(1, spawnedDisplay.getItemStack().getCount());
+		assertEquals(BlockPos.containing(new Vec3(10.5, 65.0, -20.5)), spawnedDisplay.blockPosition());
+	}
+
+	@Test void summonWithoutArgumentCopiesOneMainHandItemWithoutConsuming() throws Exception {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+		DropEventCommand.register(dispatcher, buildContext());
+		CommandSourceStack source = operatorSource();
+		ServerPlayer holder = mock(ServerPlayer.class);
+		ItemStack held = new ItemStack(Items.DIAMOND_SWORD, 3);
+		when(holder.getMainHandItem()).thenReturn(held);
+		when(source.getEntity()).thenReturn(holder);
+
+		int result = dispatcher.execute("dropevent summon", source);
+
+		assertEquals(Command.SINGLE_SUCCESS, result);
+		ArgumentCaptor<Entity> spawned = ArgumentCaptor.forClass(Entity.class);
+		verify(world).addFreshEntity(spawned.capture());
+		Display.ItemDisplay spawnedDisplay = (Display.ItemDisplay) spawned.getValue();
+		assertTrue(spawnedDisplay.getItemStack().is(Items.DIAMOND_SWORD));
+		assertEquals(1, spawnedDisplay.getItemStack().getCount());
+		assertEquals(3, held.getCount());
+	}
+
+	@Test void summonWithoutArgumentAndEmptyHandFails() throws Exception {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+		DropEventCommand.register(dispatcher, buildContext());
+		CommandSourceStack source = operatorSource();
+		ServerPlayer holder = mock(ServerPlayer.class);
+		when(holder.getMainHandItem()).thenReturn(ItemStack.EMPTY);
+		when(source.getEntity()).thenReturn(holder);
+
+		dispatcher.execute("dropevent summon", source);
+
+		verify(source).sendFailure(any());
+		verify(world, never()).addFreshEntity(any());
+	}
+
+	@Test void summonWithoutArgumentFromConsoleFails() throws Exception {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+		DropEventCommand.register(dispatcher, buildContext());
+		CommandSourceStack source = operatorSource();
+
+		dispatcher.execute("dropevent summon", source);
+
+		verify(source).sendFailure(any());
+		verify(world, never()).addFreshEntity(any());
 	}
 
 	private void link() {
