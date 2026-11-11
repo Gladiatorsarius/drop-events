@@ -77,6 +77,16 @@ public final class DropEventCommand {
 	 * (stop accepts any state, and a missing guard).
 	 */
 	private static int run(CommandContext<CommandSourceStack> context, Action action, boolean all) {
+		try {
+			return runChecked(context, action, all);
+		} catch (RuntimeException e) {
+			// Collecting or selecting events failed: report it instead of a generic command error.
+			context.getSource().sendFailure(Component.literal("Error: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())));
+			return 0;
+		}
+	}
+
+	private static int runChecked(CommandContext<CommandSourceStack> context, Action action, boolean all) {
 		CommandSourceStack source = context.getSource();
 		if (!(source.getLevel() instanceof ServerLevel here)) {
 			source.sendFailure(Component.literal("Error: server-only command"));
