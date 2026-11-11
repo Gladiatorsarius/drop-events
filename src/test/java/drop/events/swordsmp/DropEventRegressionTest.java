@@ -418,7 +418,7 @@ class DropEventRegressionTest {
 
 	private int runStart(CommandSourceStack source) throws Exception {
 		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
-		DropEventCommand.register(dispatcher);
+		DropEventCommand.register(dispatcher, buildContext());
 		return dispatcher.execute("dropevent start", source);
 	}
 
