@@ -538,6 +538,8 @@ class DropEventRegressionTest {
 		verify(world, never()).addFreshEntity(any());
 		Display.ItemDisplay orphan = mock(Display.ItemDisplay.class);
 		trackTags(orphan, "linked_shulker:" + UUID.randomUUID());
+		when(orphan.position()).thenReturn(new Vec3(0, 65, 0));
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
 		assertEquals(1, runCommand("stop", startSource(List.of(orphan))));
 		verify(orphan).discard();
 	}
@@ -717,15 +719,72 @@ class DropEventRegressionTest {
 		verify(guard).removeEffect(net.minecraft.world.effect.MobEffects.RESISTANCE);
 	}
 
-	@Test void missingGuardDeletesInactiveDisplayButStillPaysRunningOne() {
+	private void tickTimes(int n) {
+		for (int i = 0; i < n; i++) ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
+	}
+
+	private void missingGuardSetup(String... extraTags) {
 		link();
 		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		for (String t : extraTags) tags(display).add(t);
 		when(world.getEntity(guard.getUUID())).thenReturn(null);
 		when(server.getAllLevels()).thenReturn(List.of(world));
+		when(display.position()).thenReturn(new Vec3(0, 65, 0));
 		ServerEntityEvents.ENTITY_LOAD.invoker().onLoad(display, world);
-		ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
+	}
+
+	@Test void guardInUnloadedChunkIsNeverTreatedAsLost() {
+		missingGuardSetup();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(false);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS * 3);
+		verify(display, never()).discard();
+		verify(world, never()).addFreshEntity(any());
+	}
+
+	@Test void inactiveGuardMissingFromItsLoadedChunkDeletesDisplayAfterGraceWithoutReward() {
+		missingGuardSetup();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		verify(display, never()).discard();
+		tickTimes(1);
 		verify(display).discard();
 		verify(world, never()).addFreshEntity(any());
+	}
+
+	@Test void guardReappearingResetsTheMissingCounter() {
+		missingGuardSetup();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		when(world.getGameRules()).thenReturn(mock(GameRules.class));
+		when(guard.getDeltaMovement()).thenReturn(Vec3.ZERO);
+		when(world.getEntity(guard.getUUID())).thenReturn(guard);
+		tickTimes(1);
+		when(world.getEntity(guard.getUUID())).thenReturn(null);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		verify(display, never()).discard();
+	}
+
+	@Test void runningEventWithLostGuardStillPaysOutAfterGrace() {
+		missingGuardSetup(DropEventState.TAG_RUNNING);
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.DIAMOND));
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		try (MockedConstruction<ItemEntity> drops = mockConstruction(ItemEntity.class)) {
+			tickTimes(DropEventLinker.MISSING_GUARD_TICKS);
+			assertEquals(1, drops.constructed().size());
+			verify(display).discard();
+		}
+	}
+
+	@Test void stopSkipsEventWhoseGuardChunkIsNotLoadedInsteadOfOrphaningTheGuard() throws Exception {
+		link();
+		when(world.getEntity(guard.getUUID())).thenReturn(null);
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(false);
+		when(display.position()).thenReturn(new Vec3(0, 65, 0));
+		assertEquals(0, runCommand("stop", startSource(List.of(display))));
+		verify(display, never()).discard();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		assertEquals(1, runCommand("stop", startSource(List.of(display))));
+		verify(display).discard();
 	}
 
 }
