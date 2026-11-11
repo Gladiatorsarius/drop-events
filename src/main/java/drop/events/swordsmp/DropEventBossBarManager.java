@@ -40,15 +40,10 @@ public final class DropEventBossBarManager {
 		});
 	}
 
-	public static boolean createBossBarForDisplay(ServerLevel world, Display.ItemDisplay display, Shulker shulker) {
-		return showBar(world, display, shulker, false);
-	}
-
-	/** Creates or retitles the bar. Returns true only when a new bar is created. */
-	public static boolean showBar(ServerLevel world, Display.ItemDisplay display, Shulker shulker, boolean paused) {
+	/** Creates the bar or retitles an existing one. */
+	public static void showBar(ServerLevel world, Display.ItemDisplay display, Shulker shulker, boolean paused) {
 		UUID id = shulker.getUUID();
 		TrackedBar tracked = BARS.get(id);
-		boolean created = tracked == null;
 		if (tracked == null) {
 			ServerBossEvent bar = new ServerBossEvent(title(display, paused), BossEvent.BossBarColor.PURPLE, BossEvent.BossBarOverlay.PROGRESS);
 			tracked = new TrackedBar(shulker, bar, paused, world.getGameTime());
@@ -60,7 +55,6 @@ public final class DropEventBossBarManager {
 		}
 		updateProgress(tracked);
 		for (var player : world.getServer().getPlayerList().getPlayers()) tracked.bar().addPlayer(player);
-		return created;
 	}
 
 	/** Cheap per-tick reconcile: recreates a missing bar or fixes the paused suffix. No announcement. */

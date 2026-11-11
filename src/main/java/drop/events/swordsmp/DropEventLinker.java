@@ -136,16 +136,16 @@ public final class DropEventLinker {
 	 */
 	private static void reconcileState(ServerLevel world, Display.ItemDisplay display, Shulker shulker) {
 		DropEventState.State state = DropEventState.of(shulker);
-		if (state == DropEventState.State.UNTOUCHED) {
-			if (DropEventState.of(display) != state) DropEventState.set(display, shulker, state);
-			DropEventState.applyProtection(shulker);
-			return;
-		}
 		if (state == DropEventState.State.RUNNING && !DropEventState.startedThisSession(shulker.getUUID())) {
-			DropEventState.set(display, shulker, DropEventState.State.PAUSED);
 			state = DropEventState.State.PAUSED;
 		}
+		// The guard is the source of truth. Mirror it on the display in every state so a
+		// partial save cannot leave the display with a state that decides a wrong payout.
+		if (DropEventState.of(display) != state || DropEventState.of(shulker) != state) {
+			DropEventState.set(display, shulker, state);
+		}
 		DropEventState.applyProtection(shulker);
+		if (state == DropEventState.State.UNTOUCHED) return;
 		DropEventBossBarManager.ensureBar(world, display, shulker, state == DropEventState.State.PAUSED);
 	}
 

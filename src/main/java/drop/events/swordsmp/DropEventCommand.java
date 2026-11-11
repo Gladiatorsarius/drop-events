@@ -1,6 +1,8 @@
 package drop.events.swordsmp;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -75,60 +77,50 @@ public final class DropEventCommand {
 	 * (stop accepts any state, and a missing guard).
 	 */
 	private static int run(CommandContext<CommandSourceStack> context, Action action, boolean all) {
-		try {
-			CommandSourceStack source = context.getSource();
-			if (!(source.getLevel() instanceof ServerLevel here)) {
-				source.sendFailure(Component.literal("Error: server-only command"));
-				return 0;
-			}
-
-			List<Target> eligible = new ArrayList<>();
-			int skipped = 0;
-			if (all) {
-				for (ServerLevel world : source.getServer().getAllLevels()) skipped += collect(world, action, eligible);
-			} else {
-				skipped = collect(here, action, eligible);
-			}
-			Selection selection = new Selection(eligible, skipped);
-			if (eligible.isEmpty()) {
-				source.sendFailure(Component.literal(noTarget(action) + selection.note()));
-				return 0;
-			}
-
-			List<Target> targets = eligible;
-			if (!all && eligible.size() > 1) {
-				Vec3 pos = source.getPosition();
-				Target nearest = eligible.get(0);
-				for (Target t : eligible) {
-					if (t.display().position().distanceToSqr(pos) < nearest.display().position().distanceToSqr(pos)) nearest = t;
-				}
-				targets = List.of(nearest);
-			} else if (!all) {
-				targets = List.of(eligible.get(0));
-			}
-
-			int done = 0;
-			String firstError = null;
-			for (Target target : targets) {
-				try {
-					apply(action, target);
-					done++;
-				} catch (Exception e) {
-					// One broken event must not stop the others; report it at the end.
-					if (firstError == null) firstError = String.valueOf(e.getMessage());
-				}
-			}
-			final int count = done;
-			if (firstError != null) {
-				source.sendFailure(Component.literal("Error: " + firstError + " (" + describe(action, count) + ")"));
-				return done > 0 ? Command.SINGLE_SUCCESS : 0;
-			}
-			source.sendSuccess(() -> Component.literal(describe(action, count) + selection.note()), true);
-			return Command.SINGLE_SUCCESS;
-		} catch (Exception e) {
-			context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
+		CommandSourceStack source = context.getSource();
+		if (!(source.getLevel() instanceof ServerLevel here)) {
+			source.sendFailure(Component.literal("Error: server-only command"));
 			return 0;
 		}
+
+		List<Target> eligible = new ArrayList<>();
+		int skipped = 0;
+		if (all) {
+			for (ServerLevel world : source.getServer().getAllLevels()) skipped += collect(world, action, eligible);
+		} else {
+			skipped = collect(here, action, eligible);
+		}
+		Selection selection = new Selection(eligible, skipped);
+		if (eligible.isEmpty()) {
+			source.sendFailure(Component.literal(noTarget(action) + selection.note()));
+			return 0;
+		}
+
+		List<Target> targets = all ? eligible : List.of(nearest(eligible, source.getPosition()));
+		int done = 0;
+		String firstError = null;
+		for (Target target : targets) {
+			try {
+				apply(action, target);
+				done++;
+			} catch (Exception e) {
+				// One broken event must not stop the others; report it once at the end.
+				if (firstError == null) firstError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+			}
+		}
+		final int count = done;
+		if (firstError != null) {
+			source.sendFailure(Component.literal("Error: " + firstError + " (" + describe(action, count) + ")"));
+			return done > 0 ? Command.SINGLE_SUCCESS : 0;
+		}
+		source.sendSuccess(() -> Component.literal(describe(action, count) + selection.note()), true);
+		return Command.SINGLE_SUCCESS;
+	}
+
+	private static Target nearest(List<Target> eligible, Vec3 pos) {
+		// A single candidate needs no distance (and no position).
+		if (eligible.size() == 1) return eligible.get(0);
+		return Collections.min(eligible, Comparator.comparingDouble(t -> t.display().position().distanceToSqr(pos)));
 	}
 
 	/** Adds eligible targets to out and returns how many events were skipped. */
@@ -158,14 +150,20 @@ public final class DropEventCommand {
 	private static void apply(Action action, Target t) {
 		switch (action) {
 			case START -> {
-				// Build before the state change so a failed message cannot leave a running
-				// event that never announced.
+				// Build the message first so a build failure leaves the event untouched.
 				Component waypoint = DropEventWaypoint.waypointMessage(t.display().blockPosition(), t.world().dimension(),
 					t.display().getItemStack().getHoverName().getString());
 				DropEventState.set(t.display(), t.guard(), DropEventState.State.RUNNING);
-				DropEventBossBarManager.showBar(t.world(), t.display(), t.guard(), false);
-				// start only runs on untouched events, so this announces exactly once per start.
-				t.world().getServer().getPlayerList().broadcastSystemMessage(waypoint, false);
+				try {
+					DropEventBossBarManager.showBar(t.world(), t.display(), t.guard(), false);
+					// start only runs on untouched events, so this announces once per start.
+					t.world().getServer().getPlayerList().broadcastSystemMessage(waypoint, false);
+				} catch (RuntimeException e) {
+					// Not announced: roll back to untouched so the same start can be retried.
+					DropEventBossBarManager.removeForShulker(t.guard());
+					DropEventState.set(t.display(), t.guard(), DropEventState.State.UNTOUCHED);
+					throw e;
+				}
 			}
 			case PAUSE -> {
 				DropEventState.set(t.display(), t.guard(), DropEventState.State.PAUSED);

@@ -112,7 +112,7 @@ class DropEventRegressionTest {
 	}
 
 	@Test void lateJoinReceivesExistingBar() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		ServerPlayer joining = player();
 		ServerPlayConnectionEvents.JOIN.invoker().onPlayReady(joining.connection, null, server);
 		verify(joining.connection).send(any());
@@ -120,7 +120,7 @@ class DropEventRegressionTest {
 	}
 
 	@Test void fallbackCleanupSendsRemove() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		clearInvocations(player.connection);
 		when(guard.isAlive()).thenReturn(false);
 		DropEventBossBarManager.updateAllBossBarProgress();
@@ -131,14 +131,14 @@ class DropEventRegressionTest {
 	}
 
 	@Test void guardUnloadHidesBar() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		clearInvocations(player.connection);
 		ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(guard, world);
 		verify(player.connection).send(any());
 	}
 
 	@Test void serverStopClearsBars() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		clearInvocations(player.connection);
 		ServerLifecycleEvents.SERVER_STOPPED.invoker().onServerStopped(server);
 		verify(player.connection).send(any());
@@ -148,7 +148,7 @@ class DropEventRegressionTest {
 	}
 
 	@Test void disconnectedPlayerIsNotUpdated() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		ServerPlayConnectionEvents.DISCONNECT.invoker().onPlayDisconnect(player.connection, server);
 		clearInvocations(player.connection);
 		when(guard.getHealth()).thenReturn(250f);
@@ -157,9 +157,9 @@ class DropEventRegressionTest {
 	}
 
 	@Test void startingExistingBarDoesNotDuplicateIt() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		clearInvocations(player.connection);
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		verifyNoInteractions(player.connection);
 	}
 
@@ -393,7 +393,7 @@ class DropEventRegressionTest {
 		assertTrue(messages.getValue().getString().startsWith("xaero-waypoint:Dropevent^col^Diamond:D:"));
 	}
 
-	@Test void failedMessageBuildDoesNotActivateBarAndCanBeRetried() throws Exception {
+	@Test void failedMessageBuildLeavesEventUntouchedAndCanBeRetried() throws Exception {
 		link();
 		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
 		CommandSourceStack source = startSource(List.of(display));
@@ -401,6 +401,8 @@ class DropEventRegressionTest {
 		when(world.dimension()).thenThrow(new IllegalStateException("test message failure")).thenReturn(Level.OVERWORLD);
 		assertEquals(0, runStart(source));
 		verify(server.getPlayerList(), never()).broadcastSystemMessage(any(Component.class), anyBoolean());
+		assertEquals(DropEventState.State.UNTOUCHED, DropEventState.of(guard));
+		assertNull(DropEventBossBarManager.titleOf(guard.getUUID()));
 		assertEquals(1, runStart(source));
 		verify(server.getPlayerList()).broadcastSystemMessage(any(Component.class), eq(false));
 	}
@@ -546,7 +548,7 @@ class DropEventRegressionTest {
 	@Test void startAnnouncesEvenIfAStaleBarExistsForAnUntouchedGuard() throws Exception {
 		link();
 		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		assertEquals(1, runStart(startSource(List.of(display))));
 		verify(server.getPlayerList()).broadcastSystemMessage(any(Component.class), eq(false));
 	}
@@ -568,6 +570,44 @@ class DropEventRegressionTest {
 		assertEquals(1, runCommand("start all", source));
 		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
 		verify(source).sendFailure(any());
+	}
+
+	@Test void failedBroadcastRollsBackToUntouchedAndRetryAnnouncesOnce() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		doThrow(new IllegalStateException("send failed")).doNothing()
+			.when(players).broadcastSystemMessage(any(Component.class), anyBoolean());
+		CommandSourceStack source = startSource(List.of(display));
+		assertEquals(0, runStart(source));
+		assertEquals(DropEventState.State.UNTOUCHED, DropEventState.of(guard));
+		assertNull(DropEventBossBarManager.titleOf(guard.getUUID()));
+		assertEquals(1, runStart(source));
+		assertEquals(DropEventState.State.RUNNING, DropEventState.of(guard));
+		verify(players, times(2)).broadcastSystemMessage(any(Component.class), eq(false));
+	}
+
+	@Test void allWithZeroSuccessesReportsAUsefulErrorAndFails() throws Exception {
+		link();
+		when(display.getItemStack()).thenThrow(new IllegalStateException());
+		CommandSourceStack source = startSource(List.of(display));
+		when(server.getAllLevels()).thenReturn(List.of(world));
+		assertEquals(0, runCommand("start all", source));
+		verify(source).sendFailure(argThat(c -> c.getString().startsWith("Error: IllegalStateException") && c.getString().contains("Started 0 drop events")));
+	}
+
+	@Test void reconcileMirrorsGuardStateOntoDisplayAndLostGuardUsesRepairedState() {
+		link();
+		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		tags(guard).add(DropEventState.TAG_PAUSED);
+		tags(display).add(DropEventState.TAG_RUNNING); // desync from a partial save
+		tick();
+		assertEquals(DropEventState.State.PAUSED, DropEventState.of(display));
+		assertFalse(tags(display).contains(DropEventState.TAG_RUNNING));
+		// guard untouched, display stale paused
+		tags(guard).clear();
+		tags(guard).addAll(Set.of(DropEventLinker.TAG_SHULKER, "linked_display:" + display.getUUID()));
+		ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
+		assertEquals(DropEventState.State.UNTOUCHED, DropEventState.of(display));
 	}
 
 	@Test void withoutAllOnlyTheNearestEligibleEventIsChanged() throws Exception {
