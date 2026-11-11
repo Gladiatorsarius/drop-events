@@ -27,7 +27,7 @@ public class DropEvents implements ModInitializer {
 		DropEventShulkerDropListener.register();
 		// Register /dropevent commands
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
-			DropEventCommand.register(dispatcher);
+			DropEventCommand.register(dispatcher, registryAccess);
 		});
 		// Update all bossbar progress every server tick
 		ServerTickEvents.END_SERVER_TICK.register(server -> DropEventBossBarManager.updateAllBossBarProgress());
