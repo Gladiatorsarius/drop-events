@@ -67,7 +67,7 @@ public final class DropEventCommand {
 	/** Eligible targets plus the number of events left alone because their guard is not resolved. */
 	private record Selection(List<Target> targets, int skipped) {
 		String note() {
-			return skipped == 0 ? "" : " Skipped " + skipped + " whose guard is not loaded.";
+			return skipped == 0 ? "" : " Skipped " + skipped + " whose linked guard cannot be found.";
 		}
 	}
 

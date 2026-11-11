@@ -849,7 +849,7 @@ class DropEventRegressionTest {
 		CommandSourceStack source = startSource(List.of(display));
 		assertEquals(0, runCommand("stop", source));
 		verify(display, never()).discard();
-		verify(source).sendFailure(argThat(c -> c.getString().contains("Skipped 1")));
+		verify(source).sendFailure(argThat(c -> c.getString().contains("Skipped 1 whose linked guard cannot be found")));
 		when(world.getEntity(guard.getUUID())).thenReturn(guard);
 		assertEquals(1, runCommand("stop", startSource(List.of(display))));
 		verify(display).discard();

@@ -48,13 +48,14 @@ public final class DropEventBossBarManager {
 			ServerBossEvent bar = new ServerBossEvent(title(display, paused), BossEvent.BossBarColor.PURPLE, BossEvent.BossBarOverlay.PROGRESS);
 			tracked = new TrackedBar(shulker, bar, paused, world.getGameTime());
 			BARS.put(id, tracked);
+			for (var player : world.getServer().getPlayerList().getPlayers()) bar.addPlayer(player);
 		} else {
+			// Existing bar: players are already on it (joins are handled separately).
 			tracked.bar().setName(title(display, paused));
 			tracked = new TrackedBar(tracked.shulker(), tracked.bar(), paused, world.getGameTime());
 			BARS.put(id, tracked);
 		}
 		updateProgress(tracked);
-		for (var player : world.getServer().getPlayerList().getPlayers()) tracked.bar().addPlayer(player);
 	}
 
 	/** Cheap per-tick reconcile: recreates a missing bar or fixes the paused suffix. No announcement. */
