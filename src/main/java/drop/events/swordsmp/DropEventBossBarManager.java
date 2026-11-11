@@ -38,21 +38,39 @@ public final class DropEventBossBarManager {
 		});
 	}
 
-	/** Returns true only when a new bar is created, not on a repeated start. */
 	public static boolean createBossBarForDisplay(ServerLevel world, Display.ItemDisplay display, Shulker shulker) {
+		return showBar(world, display, shulker, false);
+	}
+
+	/** Creates or retitles the bar. Returns true only when a new bar is created. */
+	public static boolean showBar(ServerLevel world, Display.ItemDisplay display, Shulker shulker, boolean paused) {
 		UUID id = shulker.getUUID();
 		TrackedBar tracked = BARS.get(id);
 		boolean created = tracked == null;
 		if (tracked == null) {
-			ServerBossEvent bar = new ServerBossEvent(title(display), BossEvent.BossBarColor.PURPLE, BossEvent.BossBarOverlay.PROGRESS);
+			ServerBossEvent bar = new ServerBossEvent(title(display, paused), BossEvent.BossBarColor.PURPLE, BossEvent.BossBarOverlay.PROGRESS);
 			tracked = new TrackedBar(shulker, bar);
 			BARS.put(id, tracked);
 		} else {
-			tracked.bar().setName(title(display));
+			tracked.bar().setName(title(display, paused));
 		}
 		updateProgress(tracked);
 		for (var player : world.getServer().getPlayerList().getPlayers()) tracked.bar().addPlayer(player);
 		return created;
+	}
+
+	/** Cheap per-tick reconcile: recreates a missing bar or fixes the paused suffix. No announcement. */
+	static void ensureBar(ServerLevel world, Display.ItemDisplay display, Shulker shulker, boolean paused) {
+		TrackedBar tracked = BARS.get(shulker.getUUID());
+		if (tracked == null || !tracked.bar().getName().getString().equals(title(display, paused).getString())) {
+			showBar(world, display, shulker, paused);
+		}
+	}
+
+	/** Current bar title, or null when no bar exists. */
+	static String titleOf(UUID guardId) {
+		TrackedBar tracked = BARS.get(guardId);
+		return tracked == null ? null : tracked.bar().getName().getString();
 	}
 
 	public static void removeForShulker(Shulker shulker) {
@@ -82,9 +100,9 @@ public final class DropEventBossBarManager {
 		tracked.bar().setProgress(max > 0 ? Math.clamp(tracked.shulker().getHealth() / max, 0f, 1f) : 0f);
 	}
 
-	private static Component title(Display.ItemDisplay display) {
-		return Component.literal(String.format("%s at %d, %d, %d",
+	private static Component title(Display.ItemDisplay display, boolean paused) {
+		return Component.literal(String.format("%s at %d, %d, %d%s",
 			display.getItemStack().getHoverName().getString(),
-			Math.round(display.getX()), Math.round(display.getY()), Math.round(display.getZ())));
+			Math.round(display.getX()), Math.round(display.getY()), Math.round(display.getZ()), paused ? " (Paused)" : ""));
 	}
 }

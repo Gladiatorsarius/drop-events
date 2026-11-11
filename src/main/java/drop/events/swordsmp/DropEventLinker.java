@@ -54,8 +54,28 @@ public final class DropEventLinker {
 				if (reason != null && reason.shouldDestroy()) removeGuardForDisplay(world, display);
 			}
 		});
-		ServerLifecycleEvents.SERVER_STOPPED.register(server -> DISPLAYS.clear());
+		ServerLifecycleEvents.SERVER_STOPPING.register(DropEventLinker::pauseRunningEvents);
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			DISPLAYS.clear();
+			DropEventState.clear();
+		});
 		ServerTickEvents.END_SERVER_TICK.register(DropEventLinker::tickServer);
+	}
+
+	/** Shutdown: running events become paused; untouched and paused ones are left alone. */
+	private static void pauseRunningEvents(MinecraftServer server) {
+		for (ServerLevel world : server.getAllLevels()) {
+			Set<Display.ItemDisplay> displays = DISPLAYS.get(world);
+			if (displays == null) continue;
+			for (Display.ItemDisplay display : new ArrayList<>(displays)) {
+				if (!display.getTags().contains(TAG_TRIGGER)) continue;
+				UUID id = getLinkedUuid(display, TAG_LINKED_SHULKER_PREFIX);
+				if (id != null && world.getEntity(id) instanceof Shulker shulker
+						&& DropEventState.of(shulker) == DropEventState.State.RUNNING) {
+					DropEventState.set(display, shulker, DropEventState.State.PAUSED);
+				}
+			}
+		}
 	}
 
 	private static void tickServer(MinecraftServer server) {
@@ -82,13 +102,35 @@ public final class DropEventLinker {
 
 		Entity linked = world.getEntity(shulkerId);
 		if (!(linked instanceof Shulker shulker)) {
-			dropDisplayItemAndRemove(world, display);
+			// Guard missing: only a running event pays out; otherwise the display just goes away.
+			if (DropEventState.of(display) == DropEventState.State.RUNNING) dropDisplayItemAndRemove(world, display);
+			else display.discard();
 			return;
 		}
 
 		configureShulker(world, shulker);
+		reconcileState(world, display, shulker);
 		ensureLinkTag(shulker, TAG_LINKED_DISPLAY_PREFIX, display.getUUID());
 		teleportToDisplay(shulker, guardAnchor(display));
+	}
+
+	/**
+	 * A running tag that this session never started (crash, or unloaded during shutdown) is stale:
+	 * pause it. Running and paused events get their bar back after a restart or chunk reload.
+	 */
+	private static void reconcileState(ServerLevel world, Display.ItemDisplay display, Shulker shulker) {
+		DropEventState.State state = DropEventState.of(shulker);
+		if (state == DropEventState.State.UNTOUCHED) {
+			if (DropEventState.of(display) != state) DropEventState.set(display, shulker, state);
+			DropEventState.applyProtection(shulker);
+			return;
+		}
+		if (state == DropEventState.State.RUNNING && !DropEventState.startedThisSession(shulker.getUUID())) {
+			DropEventState.set(display, shulker, DropEventState.State.PAUSED);
+			state = DropEventState.State.PAUSED;
+		}
+		DropEventState.applyProtection(shulker);
+		DropEventBossBarManager.ensureBar(world, display, shulker, state == DropEventState.State.PAUSED);
 	}
 
 	private static void spawnShulker(ServerLevel world, Display.ItemDisplay display) {
@@ -202,6 +244,12 @@ public final class DropEventLinker {
 			DropEventBossBarManager.removeForShulker(shulker);
 			shulker.discard();
 		}
+	}
+
+	static void discardLinkedDisplay(Shulker shulker) {
+		if (!(shulker.level() instanceof ServerLevel world)) return;
+		UUID displayId = getLinkedUuid(shulker, TAG_LINKED_DISPLAY_PREFIX);
+		if (displayId != null && world.getEntity(displayId) instanceof Display.ItemDisplay display) display.discard();
 	}
 
 	static void dropLinkedDisplayItem(Shulker shulker) {
