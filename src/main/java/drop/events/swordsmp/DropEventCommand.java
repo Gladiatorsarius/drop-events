@@ -60,6 +60,8 @@ public final class DropEventCommand {
 		}
 	}
 
+	private static int skippedUnloaded;
+
 	private record Target(ServerLevel world, Display.ItemDisplay display, Shulker guard) {}
 
 	/**
@@ -76,13 +78,14 @@ public final class DropEventCommand {
 			}
 
 			List<Target> eligible = new ArrayList<>();
+			skippedUnloaded = 0;
 			if (all) {
 				for (ServerLevel world : source.getServer().getAllLevels()) collect(world, action, eligible);
 			} else {
 				collect(here, action, eligible);
 			}
 			if (eligible.isEmpty()) {
-				source.sendFailure(Component.literal(noTarget(action)));
+				source.sendFailure(Component.literal(noTarget(action) + skippedNote()));
 				return 0;
 			}
 
@@ -104,7 +107,7 @@ public final class DropEventCommand {
 				done++;
 			}
 			final int count = done;
-			source.sendSuccess(() -> Component.literal(describe(action, count)), true);
+			source.sendSuccess(() -> Component.literal(describe(action, count) + skippedNote()), true);
 			return Command.SINGLE_SUCCESS;
 		} catch (Exception e) {
 			context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
@@ -119,6 +122,11 @@ public final class DropEventCommand {
 			UUID shulkerId = DropEventLinker.linkedShulkerUuidFromDisplay(display);
 			Shulker guard = shulkerId != null && world.getEntity(shulkerId) instanceof Shulker s ? s : null;
 			if (action == Action.STOP) {
+				// A guard that is merely unloaded must not be orphaned: leave that event alone.
+				if (guard == null && shulkerId != null && !DropEventLinker.guardChunkLoaded(world, display)) {
+					skippedUnloaded++;
+					continue;
+				}
 				out.add(new Target(world, display, guard));
 			} else if (guard != null && DropEventState.of(guard) == action.requires) {
 				out.add(new Target(world, display, guard));
@@ -157,6 +165,10 @@ public final class DropEventCommand {
 				t.display().discard();
 			}
 		}
+	}
+
+	private static String skippedNote() {
+		return skippedUnloaded == 0 ? "" : " Skipped " + skippedUnloaded + " whose guard chunk is not loaded.";
 	}
 
 	private static String noTarget(Action action) {

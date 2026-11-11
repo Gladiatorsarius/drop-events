@@ -10,6 +10,7 @@ import java.util.UUID;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Display;
@@ -31,6 +32,9 @@ public final class DropEventLinker {
 	private static final String TAG_LINKED_SHULKER_PREFIX = "linked_shulker:";
 	private static final double GUARD_VERTICAL_OFFSET = -1.0;
 	private static final double DISPLAY_LINK_OFFSET = -0.5;
+	/** Consecutive ticks the guard was missing while its chunk was loaded, per display. */
+	private static final Map<UUID, Integer> MISSING_TICKS = new HashMap<>();
+	static final int MISSING_GUARD_TICKS = 40;
 	private static final Map<ServerLevel, Set<Display.ItemDisplay>> DISPLAYS = new HashMap<>();
 
 	private DropEventLinker() {
@@ -57,6 +61,7 @@ public final class DropEventLinker {
 		ServerLifecycleEvents.SERVER_STOPPING.register(DropEventLinker::pauseRunningEvents);
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 			DISPLAYS.clear();
+			MISSING_TICKS.clear();
 			DropEventState.clear();
 		});
 		ServerTickEvents.END_SERVER_TICK.register(DropEventLinker::tickServer);
@@ -102,11 +107,21 @@ public final class DropEventLinker {
 
 		Entity linked = world.getEntity(shulkerId);
 		if (!(linked instanceof Shulker shulker)) {
-			// Guard missing: only a running event pays out; otherwise the display just goes away.
+			// world.getEntity is also null for a guard in a chunk that is not loaded yet (the guard
+			// sits right below the display and can be across a chunk border). Only a guard that stays
+			// missing while its own chunk is ticking counts as lost.
+			if (!guardChunkLoaded(world, display)) {
+				MISSING_TICKS.remove(display.getUUID());
+				return;
+			}
+			if (MISSING_TICKS.merge(display.getUUID(), 1, Integer::sum) < MISSING_GUARD_TICKS) return;
+			MISSING_TICKS.remove(display.getUUID());
+			// Lost for real: only a running event pays out; otherwise the display just goes away.
 			if (DropEventState.of(display) == DropEventState.State.RUNNING) dropDisplayItemAndRemove(world, display);
 			else display.discard();
 			return;
 		}
+		MISSING_TICKS.remove(display.getUUID());
 
 		configureShulker(world, shulker);
 		reconcileState(world, display, shulker);
@@ -131,6 +146,11 @@ public final class DropEventLinker {
 		}
 		DropEventState.applyProtection(shulker);
 		DropEventBossBarManager.ensureBar(world, display, shulker, state == DropEventState.State.PAUSED);
+	}
+
+	/** True when the chunk that holds the guard (just below the display) is loaded and ticking entities. */
+	static boolean guardChunkLoaded(ServerLevel world, Display.ItemDisplay display) {
+		return world.isPositionEntityTicking(BlockPos.containing(guardAnchor(display)));
 	}
 
 	private static void spawnShulker(ServerLevel world, Display.ItemDisplay display) {
