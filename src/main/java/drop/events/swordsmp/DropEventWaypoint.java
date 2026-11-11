@@ -10,17 +10,38 @@ import net.minecraft.world.level.Level;
 public final class DropEventWaypoint {
 	private DropEventWaypoint() {}
 
-	public static Component waypointMessage(BlockPos pos, ResourceKey<Level> dimension) {
+	private static final String NAME_PREFIX = "Dropevent:";
+	// Xaero 26.6.2 rejects shared names outside 1..32 characters (decoded).
+	private static final int MAX_NAME_LENGTH = 32;
+
+	public static Component waypointMessage(BlockPos pos, ResourceKey<Level> dimension, String itemName) {
 		// Token-only: Xaero hides any chat line containing its token and replaces
 		// it with its own share message, so extra text would only reach players
-		// without Xaero. The item name stays visible in the bossbar title.
-		return Component.literal(waypointToken(pos, dimension));
+		// without Xaero.
+		return Component.literal(waypointToken(pos, dimension, itemName));
 	}
 
-	static String waypointToken(BlockPos pos, ResourceKey<Level> dimension) {
-		// Fixed, short name avoids delimiters and unbounded client translations.
-		return "xaero-waypoint:Drop event:D:" + pos.getX() + ":" + pos.getY() + ":" + pos.getZ()
+	static String waypointToken(BlockPos pos, ResourceKey<Level> dimension, String itemName) {
+		return "xaero-waypoint:" + xaeroField(waypointName(itemName)) + ":D:" + pos.getX() + ":" + pos.getY() + ":" + pos.getZ()
 			+ ":6:false:0:Internal-" + xaeroDimension(dimension.identifier()) + "-waypoints";
+	}
+
+	/** "Dropevent:" plus the item display name, cut to Xaero's 32 character limit. */
+	static String waypointName(String itemName) {
+		StringBuilder name = new StringBuilder(NAME_PREFIX);
+		if (itemName != null) {
+			// Xaero strips section-sign codes from the whole line; controls would break it.
+			String clean = itemName.replace("\u00a7", "").replaceAll("\\p{Cntrl}+", " ").strip();
+			int end = Math.min(clean.length(), MAX_NAME_LENGTH - NAME_PREFIX.length());
+			if (end > 0 && end < clean.length() && Character.isHighSurrogate(clean.charAt(end - 1))) end--;
+			name.append(clean, 0, end);
+		}
+		return name.toString().stripTrailing();
+	}
+
+	/** Mirrors Xaero 26.6.2 WaypointSharingHandler: colon, then removeFormatting order. */
+	static String xaeroField(String value) {
+		return value.replace(":", "^col^").replace("-", "^min^").replace("_", "-").replace("*", "^ast^");
 	}
 
 	static String xaeroDimension(Identifier dimension) {
