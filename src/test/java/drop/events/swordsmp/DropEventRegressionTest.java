@@ -256,6 +256,13 @@ class DropEventRegressionTest {
 		assertEquals(10, hostile.split(":").length);
 	}
 
+	@Test void reservedXaeroEscapeSequencesInNamesDoNotRoundTripLiterally() {
+		// Known limit: Xaero has no escape for its own markers, so these names show decoded.
+		assertEquals("Dropevent^col^a^col^b", DropEventWaypoint.xaeroField("Dropevent:a^col^b"));
+		String token = DropEventWaypoint.waypointToken(BlockPos.ZERO, Level.OVERWORLD, "^col^^min^^ast^");
+		assertEquals(10, token.split(":").length);
+	}
+
 	@Test void waypointNameIsCutToXaeroLimit() {
 		String name = DropEventWaypoint.waypointName("Enchanted Netherite Chestplate of Doom");
 		assertEquals(32, name.length());
