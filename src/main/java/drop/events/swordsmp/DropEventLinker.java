@@ -10,6 +10,7 @@ import java.util.UUID;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Display;
@@ -31,6 +32,9 @@ public final class DropEventLinker {
 	private static final String TAG_LINKED_SHULKER_PREFIX = "linked_shulker:";
 	private static final double GUARD_VERTICAL_OFFSET = -1.0;
 	private static final double DISPLAY_LINK_OFFSET = -0.5;
+	/** Consecutive ticks the guard was missing while its chunk was loaded, per display. */
+	private static final Map<UUID, Integer> MISSING_TICKS = new HashMap<>();
+	static final int MISSING_GUARD_TICKS = 40;
 	private static final Map<ServerLevel, Set<Display.ItemDisplay>> DISPLAYS = new HashMap<>();
 
 	private DropEventLinker() {
@@ -45,6 +49,7 @@ public final class DropEventLinker {
 		});
 		ServerEntityEvents.ENTITY_UNLOAD.register((entity, world) -> {
 			if (entity instanceof Display.ItemDisplay display) {
+				MISSING_TICKS.remove(display.getUUID());
 				Set<Display.ItemDisplay> displays = DISPLAYS.get(world);
 				if (displays != null) {
 					displays.remove(display);
@@ -54,8 +59,29 @@ public final class DropEventLinker {
 				if (reason != null && reason.shouldDestroy()) removeGuardForDisplay(world, display);
 			}
 		});
-		ServerLifecycleEvents.SERVER_STOPPED.register(server -> DISPLAYS.clear());
+		ServerLifecycleEvents.SERVER_STOPPING.register(DropEventLinker::pauseRunningEvents);
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			DISPLAYS.clear();
+			MISSING_TICKS.clear();
+			DropEventState.clear();
+		});
 		ServerTickEvents.END_SERVER_TICK.register(DropEventLinker::tickServer);
+	}
+
+	/** Shutdown: running events become paused; untouched and paused ones are left alone. */
+	private static void pauseRunningEvents(MinecraftServer server) {
+		for (ServerLevel world : server.getAllLevels()) {
+			Set<Display.ItemDisplay> displays = DISPLAYS.get(world);
+			if (displays == null) continue;
+			for (Display.ItemDisplay display : new ArrayList<>(displays)) {
+				if (!display.getTags().contains(TAG_TRIGGER)) continue;
+				UUID id = getLinkedUuid(display, TAG_LINKED_SHULKER_PREFIX);
+				if (id != null && world.getEntity(id) instanceof Shulker shulker
+						&& DropEventState.of(shulker) == DropEventState.State.RUNNING) {
+					DropEventState.set(display, shulker, DropEventState.State.PAUSED);
+				}
+			}
+		}
 	}
 
 	private static void tickServer(MinecraftServer server) {
@@ -82,13 +108,61 @@ public final class DropEventLinker {
 
 		Entity linked = world.getEntity(shulkerId);
 		if (!(linked instanceof Shulker shulker)) {
-			dropDisplayItemAndRemove(world, display);
+			// world.getEntity is also null for a guard in a chunk that is not loaded yet (the guard
+			// sits right below the display and can be across a chunk border). Only a guard that stays
+			// missing while its own chunk is ticking counts as lost.
+			if (!guardChunkLoaded(world, display)) {
+				MISSING_TICKS.remove(display.getUUID());
+				return;
+			}
+			if (MISSING_TICKS.merge(display.getUUID(), 1, Integer::sum) < MISSING_GUARD_TICKS) return;
+			MISSING_TICKS.remove(display.getUUID());
+			// Lost for real: only a running event pays out; otherwise the display just goes away.
+			if (DropEventState.of(display) == DropEventState.State.RUNNING) dropDisplayItemAndRemove(world, display);
+			else display.discard();
 			return;
 		}
+		MISSING_TICKS.remove(display.getUUID());
 
 		configureShulker(world, shulker);
+		reconcileState(world, display, shulker);
 		ensureLinkTag(shulker, TAG_LINKED_DISPLAY_PREFIX, display.getUUID());
 		teleportToDisplay(shulker, guardAnchor(display));
+	}
+
+	/**
+	 * A running tag that this session never started (crash, or unloaded during shutdown) is stale:
+	 * pause it. Running and paused events get their bar back after a restart or chunk reload.
+	 */
+	private static void reconcileState(ServerLevel world, Display.ItemDisplay display, Shulker shulker) {
+		DropEventState.State state = DropEventState.of(shulker);
+		if (state == DropEventState.State.RUNNING && !DropEventState.startedThisSession(shulker.getUUID())) {
+			state = DropEventState.State.PAUSED;
+		}
+		// The guard is the source of truth. Mirror it on the display in every state so a
+		// partial save cannot leave the display with a state that decides a wrong payout.
+		if (DropEventState.of(display) != state || DropEventState.of(shulker) != state) {
+			DropEventState.set(display, shulker, state);
+		}
+		DropEventState.applyProtection(shulker);
+		if (state == DropEventState.State.UNTOUCHED) return;
+		DropEventBossBarManager.ensureBar(world, display, shulker, state == DropEventState.State.PAUSED);
+	}
+
+	static void inheritState(Display.ItemDisplay display, Shulker shulker) {
+		DropEventState.State inherited = DropEventState.of(display);
+		if (inherited != DropEventState.State.UNTOUCHED) {
+			shulker.addTag(inherited == DropEventState.State.RUNNING ? DropEventState.TAG_RUNNING : DropEventState.TAG_PAUSED);
+		}
+	}
+
+	static void forgetMissing(Display.ItemDisplay display) {
+		MISSING_TICKS.remove(display.getUUID());
+	}
+
+	/** True when the chunk that holds the guard (just below the display) is loaded and ticking entities. */
+	static boolean guardChunkLoaded(ServerLevel world, Display.ItemDisplay display) {
+		return world.isPositionEntityTicking(BlockPos.containing(guardAnchor(display)));
 	}
 
 	private static void spawnShulker(ServerLevel world, Display.ItemDisplay display) {
@@ -105,6 +179,9 @@ public final class DropEventLinker {
 
 		ensureLinkTag(shulker, TAG_LINKED_DISPLAY_PREFIX, display.getUUID());
 		ensureLinkTag(display, TAG_LINKED_SHULKER_PREFIX, shulker.getUUID());
+		// A replacement guard (the old one is gone) continues the display's lifecycle state. A
+		// running tag with no session start is then paused by the next reconcile.
+		inheritState(display, shulker);
 
 		world.addFreshEntity(shulker);
 		teleportDisplayToShulker(display, shulker);
@@ -202,6 +279,12 @@ public final class DropEventLinker {
 			DropEventBossBarManager.removeForShulker(shulker);
 			shulker.discard();
 		}
+	}
+
+	static void discardLinkedDisplay(Shulker shulker) {
+		if (!(shulker.level() instanceof ServerLevel world)) return;
+		UUID displayId = getLinkedUuid(shulker, TAG_LINKED_DISPLAY_PREFIX);
+		if (displayId != null && world.getEntity(displayId) instanceof Display.ItemDisplay display) display.discard();
 	}
 
 	static void dropLinkedDisplayItem(Shulker shulker) {

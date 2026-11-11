@@ -65,6 +65,7 @@ class DropEventRegressionTest {
 		Bootstrap.bootStrap();
 		DropEventBossBarManager.register();
 		DropEventLinker.register();
+		DropEventShulkerDropListener.register();
 	}
 
 	@BeforeEach void setup() {
@@ -111,7 +112,7 @@ class DropEventRegressionTest {
 	}
 
 	@Test void lateJoinReceivesExistingBar() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		ServerPlayer joining = player();
 		ServerPlayConnectionEvents.JOIN.invoker().onPlayReady(joining.connection, null, server);
 		verify(joining.connection).send(any());
@@ -119,7 +120,7 @@ class DropEventRegressionTest {
 	}
 
 	@Test void fallbackCleanupSendsRemove() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		clearInvocations(player.connection);
 		when(guard.isAlive()).thenReturn(false);
 		DropEventBossBarManager.updateAllBossBarProgress();
@@ -130,14 +131,14 @@ class DropEventRegressionTest {
 	}
 
 	@Test void guardUnloadHidesBar() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		clearInvocations(player.connection);
 		ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(guard, world);
 		verify(player.connection).send(any());
 	}
 
 	@Test void serverStopClearsBars() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		clearInvocations(player.connection);
 		ServerLifecycleEvents.SERVER_STOPPED.invoker().onServerStopped(server);
 		verify(player.connection).send(any());
@@ -147,7 +148,7 @@ class DropEventRegressionTest {
 	}
 
 	@Test void disconnectedPlayerIsNotUpdated() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		ServerPlayConnectionEvents.DISCONNECT.invoker().onPlayDisconnect(player.connection, server);
 		clearInvocations(player.connection);
 		when(guard.getHealth()).thenReturn(250f);
@@ -156,9 +157,9 @@ class DropEventRegressionTest {
 	}
 
 	@Test void startingExistingBarDoesNotDuplicateIt() {
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		clearInvocations(player.connection);
-		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		DropEventBossBarManager.showBar(world, display, guard, false);
 		verifyNoInteractions(player.connection);
 	}
 
@@ -301,9 +302,20 @@ class DropEventRegressionTest {
 	private void link() {
 		UUID guardId = guard.getUUID();
 		UUID displayId = display.getUUID();
-		when(display.getTags()).thenReturn(Set.of("linked_shulker:" + guardId));
-		when(guard.getTags()).thenReturn(Set.of(DropEventLinker.TAG_SHULKER, "linked_display:" + displayId));
+		trackTags(display, "linked_shulker:" + guardId);
+		trackTags(guard, DropEventLinker.TAG_SHULKER, "linked_display:" + displayId);
 		when(world.getEntity(guardId)).thenReturn(guard);
+		when(guard.level()).thenReturn(world);
+		when(world.getEntity(displayId)).thenReturn(display);
+	}
+
+	/** Makes a mocked entity keep real tag state. */
+	private static Set<String> trackTags(Entity entity, String... initial) {
+		Set<String> tags = new HashSet<>(Set.of(initial));
+		when(entity.getTags()).thenReturn(tags);
+		when(entity.addTag(anyString())).thenAnswer(i -> tags.add(i.getArgument(0)));
+		when(entity.removeTag(anyString())).thenAnswer(i -> tags.remove(i.getArgument(0)));
+		return tags;
 	}
 
 	@Test void stationarySnappedGuardDoesNotTeleport() throws Exception {
@@ -381,7 +393,7 @@ class DropEventRegressionTest {
 		assertTrue(messages.getValue().getString().startsWith("xaero-waypoint:Dropevent^col^Diamond:D:"));
 	}
 
-	@Test void failedMessageBuildDoesNotActivateBarAndCanBeRetried() throws Exception {
+	@Test void failedMessageBuildLeavesEventUntouchedAndCanBeRetried() throws Exception {
 		link();
 		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
 		CommandSourceStack source = startSource(List.of(display));
@@ -389,6 +401,8 @@ class DropEventRegressionTest {
 		when(world.dimension()).thenThrow(new IllegalStateException("test message failure")).thenReturn(Level.OVERWORLD);
 		assertEquals(0, runStart(source));
 		verify(server.getPlayerList(), never()).broadcastSystemMessage(any(Component.class), anyBoolean());
+		assertEquals(DropEventState.State.UNTOUCHED, DropEventState.of(guard));
+		assertNull(DropEventBossBarManager.titleOf(guard.getUUID()));
 		assertEquals(1, runStart(source));
 		verify(server.getPlayerList()).broadcastSystemMessage(any(Component.class), eq(false));
 	}
@@ -408,6 +422,8 @@ class DropEventRegressionTest {
 		when(source.getLevel()).thenReturn(world);
 		when(source.permissions()).thenReturn(LevelBasedPermissionSet.forLevel(PermissionLevel.GAMEMASTERS));
 		when(world.dimension()).thenReturn(Level.NETHER);
+		when(source.getPosition()).thenReturn(new Vec3(10.5, 65.0, -20.5));
+		when(source.getServer()).thenReturn(server);
 		doAnswer(invocation -> {
 			List<Display.ItemDisplay> found = invocation.getArgument(2);
 			found.addAll(displays);
@@ -431,13 +447,16 @@ class DropEventRegressionTest {
 		UUID otherId = UUID.randomUUID();
 		when(otherGuard.getUUID()).thenReturn(otherId);
 		when(otherGuard.getMaxHealth()).thenReturn(1000f);
-		when(second.getTags()).thenReturn(Set.of("linked_shulker:" + otherId));
+		when(second.getUUID()).thenReturn(UUID.randomUUID());
+		trackTags(second, "linked_shulker:" + otherId);
+		trackTags(otherGuard, DropEventLinker.TAG_SHULKER);
 		when(second.getItemStack()).thenReturn(new ItemStack(Items.STICK));
 		when(second.blockPosition()).thenReturn(new BlockPos(1, 2, 3));
 		when(world.getEntity(otherId)).thenReturn(otherGuard);
 		CommandSourceStack source = startSource(List.of(display, second));
-		assertEquals(1, runStart(source));
-		assertEquals(1, runStart(source));
+		when(server.getAllLevels()).thenReturn(List.of(world));
+		assertEquals(1, runCommand("start all", source));
+		assertEquals(0, runCommand("start all", source), "already running events are not started again");
 		ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
 		verify(server.getPlayerList(), times(2)).broadcastSystemMessage(messages.capture(), eq(false));
 		assertEquals("xaero-waypoint:Dropevent^col^Diamond:D:10:65:-21:6:false:0:Internal-the-nether-waypoints", messages.getAllValues().get(0).getString());
@@ -455,14 +474,428 @@ class DropEventRegressionTest {
 		verify(server.getPlayerList(), never()).broadcastSystemMessage(any(Component.class), anyBoolean());
 	}
 
-	@Test void removedBarCanAnnounceAgainAfterRestart() throws Exception {
+	private int runCommand(String command, CommandSourceStack source) throws Exception {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+		DropEventCommand.register(dispatcher, buildContext());
+		try {
+			return dispatcher.execute("dropevent " + command, source);
+		} catch (com.mojang.brigadier.exceptions.CommandSyntaxException e) {
+			return -1;
+		}
+	}
+
+	private Set<String> tags(Entity e) { return e.getTags(); }
+
+	@Test void startOnlyAffectsUntouchedAndAnnouncesOnce() throws Exception {
 		link();
 		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
 		CommandSourceStack source = startSource(List.of(display));
 		assertEquals(1, runStart(source));
-		DropEventBossBarManager.removeForShulker(guard);
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		assertTrue(tags(display).contains(DropEventState.TAG_RUNNING));
+		assertEquals(0, runStart(source));
+		verify(server.getPlayerList(), times(1)).broadcastSystemMessage(any(Component.class), eq(false));
+		assertTrue(DropEventBossBarManager.titleOf(guard.getUUID()).endsWith(" at 0, 0, 0"));
+	}
+
+	@Test void pauseOnlyRunningKeepsBarVisibleWithSuffixAndResumeRemovesIt() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		CommandSourceStack source = startSource(List.of(display));
+		assertEquals(0, runCommand("pause", source), "untouched cannot be paused");
+		assertEquals(0, runCommand("resume", source), "untouched cannot be resumed");
+		runStart(source);
+		assertEquals(0, runCommand("resume", source), "running cannot be resumed");
+		assertEquals(1, runCommand("pause", source));
+		assertTrue(tags(guard).contains(DropEventState.TAG_PAUSED));
+		assertFalse(tags(guard).contains(DropEventState.TAG_RUNNING));
+		assertTrue(DropEventBossBarManager.titleOf(guard.getUUID()).endsWith(" (Paused)"));
+		assertEquals(0, runCommand("pause", source), "paused cannot be paused");
+		assertEquals(0, runCommand("start", source), "paused cannot be started");
+		assertEquals(1, runCommand("resume", source));
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		assertFalse(DropEventBossBarManager.titleOf(guard.getUUID()).contains("Paused"));
+		verify(server.getPlayerList(), times(1)).broadcastSystemMessage(any(Component.class), eq(false));
+	}
+
+	@Test void stopWorksInAnyStateWithoutRewardAndRemovesBarGuardAndDisplay() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		CommandSourceStack source = startSource(List.of(display));
+		runStart(source);
+		runCommand("pause", source);
+		assertEquals(1, runCommand("stop", source));
+		verify(guard).discard();
+		verify(display).discard();
+		verify(world, never()).addFreshEntity(any());
+		assertNull(DropEventBossBarManager.titleOf(guard.getUUID()));
+	}
+
+	@Test void stopRemovesUntouchedEventAndEventThatNeverGotAGuard() throws Exception {
+		link();
+		CommandSourceStack source = startSource(List.of(display));
+		assertEquals(1, runCommand("stop", source));
+		verify(guard).discard();
+		verify(display).discard();
+		verify(world, never()).addFreshEntity(any());
+		Display.ItemDisplay orphan = mock(Display.ItemDisplay.class);
+		trackTags(orphan);
+		when(orphan.position()).thenReturn(new Vec3(0, 65, 0));
+		assertEquals(1, runCommand("stop", startSource(List.of(orphan))));
+		verify(orphan).discard();
+	}
+
+	@Test void startAnnouncesEvenIfAStaleBarExistsForAnUntouchedGuard() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		DropEventBossBarManager.showBar(world, display, guard, false);
+		assertEquals(1, runStart(startSource(List.of(display))));
+		verify(server.getPlayerList()).broadcastSystemMessage(any(Component.class), eq(false));
+	}
+
+	@Test void oneFailingEventDoesNotStopTheRestOfAll() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		Display.ItemDisplay broken = mock(Display.ItemDisplay.class);
+		Shulker brokenGuard = mock(Shulker.class);
+		UUID brokenId = UUID.randomUUID();
+		when(brokenGuard.getUUID()).thenReturn(brokenId);
+		when(broken.getUUID()).thenReturn(UUID.randomUUID());
+		when(broken.getItemStack()).thenThrow(new IllegalStateException("boom"));
+		trackTags(broken, "linked_shulker:" + brokenId);
+		trackTags(brokenGuard, DropEventLinker.TAG_SHULKER);
+		when(world.getEntity(brokenId)).thenReturn(brokenGuard);
+		when(server.getAllLevels()).thenReturn(List.of(world));
+		CommandSourceStack source = startSource(List.of(broken, display));
+		assertEquals(1, runCommand("start all", source));
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		verify(source).sendFailure(any());
+	}
+
+	@Test void failedBroadcastRollsBackToUntouchedAndRetryAnnouncesOnce() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		doThrow(new IllegalStateException("send failed")).doNothing()
+			.when(players).broadcastSystemMessage(any(Component.class), anyBoolean());
+		CommandSourceStack source = startSource(List.of(display));
+		assertEquals(0, runStart(source));
+		assertEquals(DropEventState.State.UNTOUCHED, DropEventState.of(guard));
+		assertNull(DropEventBossBarManager.titleOf(guard.getUUID()));
 		assertEquals(1, runStart(source));
-		verify(server.getPlayerList(), times(2)).broadcastSystemMessage(any(Component.class), eq(false));
+		assertEquals(DropEventState.State.RUNNING, DropEventState.of(guard));
+		verify(players, times(2)).broadcastSystemMessage(any(Component.class), eq(false));
+	}
+
+	@Test void allWithZeroSuccessesReportsAUsefulErrorAndFails() throws Exception {
+		link();
+		when(display.getItemStack()).thenThrow(new IllegalStateException());
+		CommandSourceStack source = startSource(List.of(display));
+		when(server.getAllLevels()).thenReturn(List.of(world));
+		assertEquals(0, runCommand("start all", source));
+		verify(source).sendFailure(argThat(c -> c.getString().startsWith("Error: IllegalStateException") && c.getString().contains("Started 0 drop events")));
+	}
+
+	@Test void reconcileMirrorsGuardStateOntoDisplayAndLostGuardUsesRepairedState() {
+		link();
+		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		tags(guard).add(DropEventState.TAG_PAUSED);
+		tags(display).add(DropEventState.TAG_RUNNING); // desync from a partial save
+		tick();
+		assertEquals(DropEventState.State.PAUSED, DropEventState.of(display));
+		assertFalse(tags(display).contains(DropEventState.TAG_RUNNING));
+		// guard untouched, display stale paused
+		tags(guard).clear();
+		tags(guard).addAll(Set.of(DropEventLinker.TAG_SHULKER, "linked_display:" + display.getUUID()));
+		ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
+		assertEquals(DropEventState.State.UNTOUCHED, DropEventState.of(display));
+	}
+
+	@Test void withoutAllOnlyTheNearestEligibleEventIsChanged() throws Exception {
+		link();
+		when(display.position()).thenReturn(new Vec3(100, 65, 100));
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		Display.ItemDisplay near = mock(Display.ItemDisplay.class);
+		Shulker nearGuard = mock(Shulker.class);
+		UUID nearId = UUID.randomUUID();
+		when(nearGuard.getUUID()).thenReturn(nearId);
+		when(nearGuard.getMaxHealth()).thenReturn(10f);
+		when(near.getUUID()).thenReturn(UUID.randomUUID());
+		when(near.getItemStack()).thenReturn(ItemStack.EMPTY);
+		when(near.position()).thenReturn(new Vec3(11, 65, -20));
+		when(near.blockPosition()).thenReturn(BlockPos.ZERO);
+		trackTags(near, "linked_shulker:" + nearId);
+		trackTags(nearGuard, DropEventLinker.TAG_SHULKER);
+		when(world.getEntity(nearId)).thenReturn(nearGuard);
+		// the nearest event is already running, so it is not eligible for start
+		tags(nearGuard).add(DropEventState.TAG_RUNNING);
+		CommandSourceStack source = startSource(List.of(display, near));
+		assertEquals(1, runCommand("start", source));
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING), "nearest eligible (untouched) event started");
+		// both running now: pause takes only the nearest running one
+		assertEquals(1, runCommand("pause", source));
+		assertTrue(tags(nearGuard).contains(DropEventState.TAG_PAUSED));
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+	}
+
+	@Test void allAffectsEveryEligibleEventInEveryDimension() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		ServerLevel nether = mock(ServerLevel.class);
+		when(nether.getServer()).thenReturn(server);
+		when(nether.dimension()).thenReturn(Level.NETHER);
+		Display.ItemDisplay far = mock(Display.ItemDisplay.class);
+		Shulker farGuard = mock(Shulker.class);
+		UUID farId = UUID.randomUUID();
+		when(farGuard.getUUID()).thenReturn(farId);
+		when(farGuard.getMaxHealth()).thenReturn(10f);
+		when(far.getUUID()).thenReturn(UUID.randomUUID());
+		when(far.getItemStack()).thenReturn(ItemStack.EMPTY);
+		when(far.blockPosition()).thenReturn(BlockPos.ZERO);
+		trackTags(far, "linked_shulker:" + farId);
+		trackTags(farGuard, DropEventLinker.TAG_SHULKER);
+		when(nether.getEntity(farId)).thenReturn(farGuard);
+		doAnswer(invocation -> {
+			List<Display.ItemDisplay> found = invocation.getArgument(2);
+			found.add(far);
+			return null;
+		}).when(nether).getEntities(eq(EntityType.ITEM_DISPLAY), any(), any(List.class));
+		when(server.getAllLevels()).thenReturn(List.of(world, nether));
+		CommandSourceStack source = startSource(List.of(display));
+		when(source.getServer()).thenReturn(server);
+		assertEquals(1, runCommand("start all", source));
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		assertTrue(tags(farGuard).contains(DropEventState.TAG_RUNNING));
+		assertEquals(1, runCommand("pause all", source));
+		assertTrue(tags(farGuard).contains(DropEventState.TAG_PAUSED));
+		assertEquals(1, runCommand("stop all", source));
+		verify(guard).discard();
+		verify(farGuard).discard();
+	}
+
+	@Test void summonHasNoAllOption() {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+		DropEventCommand.register(dispatcher, buildContext());
+		var root = dispatcher.getRoot().getChild("dropevent");
+		for (String name : List.of("start", "pause", "resume", "stop")) assertNotNull(root.getChild(name).getChild("all"), name);
+		assertNull(root.getChild("summon").getChild("all"));
+	}
+
+	private Shulker diesWith(String... extraTags) {
+		link();
+		for (String t : extraTags) { guard.addTag(t); display.addTag(t); }
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.DIAMOND));
+		return guard;
+	}
+
+	@Test void untouchedAndPausedGuardDeathDeletesDisplayWithoutReward() {
+		for (String state : new String[] { null, DropEventState.TAG_PAUSED }) {
+			setup();
+			Shulker g = state == null ? diesWith() : diesWith(state);
+			net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents.AFTER_DEATH.invoker().afterDeath(g, null);
+			verify(display).discard();
+			verify(world, never()).addFreshEntity(any());
+		}
+	}
+
+	@Test void runningGuardDeathStillDropsReward() {
+		Shulker g = diesWith(DropEventState.TAG_RUNNING);
+		try (MockedConstruction<ItemEntity> drops = mockConstruction(ItemEntity.class)) {
+			net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents.AFTER_DEATH.invoker().afterDeath(g, null);
+			assertEquals(1, drops.constructed().size());
+			verify(display).discard();
+		}
+	}
+
+	private void tick() {
+		when(server.getAllLevels()).thenReturn(List.of(world));
+		when(world.getGameRules()).thenReturn(mock(GameRules.class));
+		when(display.position()).thenReturn(new Vec3(0, 65, 0));
+		when(guard.getDeltaMovement()).thenReturn(Vec3.ZERO);
+		ServerEntityEvents.ENTITY_LOAD.invoker().onLoad(display, world);
+		ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
+	}
+
+	@Test void staleRunningTagFromCrashBecomesPausedWithVisibleBar() {
+		link();
+		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		tags(guard).add(DropEventState.TAG_RUNNING);
+		tick();
+		assertTrue(tags(guard).contains(DropEventState.TAG_PAUSED));
+		assertFalse(tags(guard).contains(DropEventState.TAG_RUNNING));
+		assertTrue(DropEventBossBarManager.titleOf(guard.getUUID()).endsWith(" (Paused)"));
+	}
+
+	@Test void pausedEventGetsItsBarBackAfterRestartAndUntouchedStaysUntouched() {
+		link();
+		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		tick();
+		assertNull(DropEventBossBarManager.titleOf(guard.getUUID()));
+		assertFalse(tags(guard).contains(DropEventState.TAG_PAUSED));
+		tags(guard).add(DropEventState.TAG_PAUSED);
+		ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
+		assertTrue(DropEventBossBarManager.titleOf(guard.getUUID()).endsWith(" (Paused)"));
+	}
+
+	@Test void freshlyStartedGuardIsNotPausedAndKeepsItsBarAfterReload() throws Exception {
+		link();
+		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		runStart(startSource(List.of(display)));
+		tick();
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(guard, world);
+		assertNull(DropEventBossBarManager.titleOf(guard.getUUID()));
+		ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		assertFalse(DropEventBossBarManager.titleOf(guard.getUUID()).contains("Paused"));
+	}
+
+	@Test void shutdownPausesRunningEventsAndLeavesUntouchedAlone() throws Exception {
+		link();
+		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		runStart(startSource(List.of(display)));
+		when(server.getAllLevels()).thenReturn(List.of(world));
+		ServerEntityEvents.ENTITY_LOAD.invoker().onLoad(display, world);
+		ServerLifecycleEvents.SERVER_STOPPING.invoker().onServerStopping(server);
+		assertTrue(tags(guard).contains(DropEventState.TAG_PAUSED));
+		assertTrue(tags(display).contains(DropEventState.TAG_PAUSED));
+		// untouched event
+		setup();
+		link();
+		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		ServerEntityEvents.ENTITY_LOAD.invoker().onLoad(display, world);
+		ServerLifecycleEvents.SERVER_STOPPING.invoker().onServerStopping(server);
+		assertFalse(tags(guard).contains(DropEventState.TAG_PAUSED));
+		assertFalse(tags(guard).contains(DropEventState.TAG_RUNNING));
+	}
+
+	@Test void resistanceVOnlyWhileUntouchedOrPaused() {
+		link();
+		var captor = ArgumentCaptor.forClass(net.minecraft.world.effect.MobEffectInstance.class);
+		DropEventState.applyProtection(guard);
+		verify(guard).addEffect(captor.capture());
+		var effect = captor.getValue();
+		assertEquals(4, effect.getAmplifier());
+		assertTrue(effect.isInfiniteDuration());
+		assertTrue(effect.getEffect().is(net.minecraft.world.effect.MobEffects.RESISTANCE));
+		// running removes our effect
+		when(guard.getEffect(net.minecraft.world.effect.MobEffects.RESISTANCE)).thenReturn(effect);
+		DropEventState.set(display, guard, DropEventState.State.RUNNING);
+		verify(guard).removeEffect(net.minecraft.world.effect.MobEffects.RESISTANCE);
+	}
+
+	private void tickTimes(int n) {
+		for (int i = 0; i < n; i++) ServerTickEvents.END_SERVER_TICK.invoker().onEndTick(server);
+	}
+
+	private void missingGuardSetup(String... extraTags) {
+		link();
+		tags(display).add(DropEventLinker.TAG_TRIGGER);
+		for (String t : extraTags) tags(display).add(t);
+		when(world.getEntity(guard.getUUID())).thenReturn(null);
+		when(server.getAllLevels()).thenReturn(List.of(world));
+		when(display.position()).thenReturn(new Vec3(0, 65, 0));
+		ServerEntityEvents.ENTITY_LOAD.invoker().onLoad(display, world);
+	}
+
+	@Test void guardInUnloadedChunkIsNeverTreatedAsLost() {
+		missingGuardSetup();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(false);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS * 3);
+		verify(display, never()).discard();
+		verify(world, never()).addFreshEntity(any());
+	}
+
+	@Test void inactiveGuardMissingFromItsLoadedChunkDeletesDisplayAfterGraceWithoutReward() {
+		missingGuardSetup();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		verify(display, never()).discard();
+		tickTimes(1);
+		verify(display).discard();
+		verify(world, never()).addFreshEntity(any());
+	}
+
+	@Test void guardReappearingResetsTheMissingCounter() {
+		missingGuardSetup();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		when(world.getGameRules()).thenReturn(mock(GameRules.class));
+		when(guard.getDeltaMovement()).thenReturn(Vec3.ZERO);
+		when(world.getEntity(guard.getUUID())).thenReturn(guard);
+		tickTimes(1);
+		when(world.getEntity(guard.getUUID())).thenReturn(null);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		verify(display, never()).discard();
+	}
+
+	@Test void runningEventWithLostGuardStillPaysOutAfterGrace() {
+		missingGuardSetup(DropEventState.TAG_RUNNING);
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.DIAMOND));
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		try (MockedConstruction<ItemEntity> drops = mockConstruction(ItemEntity.class)) {
+			tickTimes(DropEventLinker.MISSING_GUARD_TICKS);
+			assertEquals(1, drops.constructed().size());
+			verify(display).discard();
+		}
+	}
+
+	@Test void stopSkipsEventWhoseLinkedGuardDoesNotResolveEvenInATickingChunk() throws Exception {
+		link();
+		when(world.getEntity(guard.getUUID())).thenReturn(null);
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		when(display.position()).thenReturn(new Vec3(0, 65, 0));
+		CommandSourceStack source = startSource(List.of(display));
+		assertEquals(0, runCommand("stop", source));
+		verify(display, never()).discard();
+		verify(source).sendFailure(argThat(c -> c.getString().contains("Skipped 1 whose linked guard cannot be found")));
+		when(world.getEntity(guard.getUUID())).thenReturn(guard);
+		assertEquals(1, runCommand("stop", startSource(List.of(display))));
+		verify(display).discard();
+	}
+
+	@Test void missingCounterDoesNotSurviveDisplayUnloadOrStop() {
+		missingGuardSetup();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		when(display.getRemovalReason()).thenReturn(Entity.RemovalReason.UNLOADED_TO_CHUNK);
+		ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(display, world);
+		ServerEntityEvents.ENTITY_LOAD.invoker().onLoad(display, world);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		verify(display, never()).discard();
+	}
+
+	@Test void barTitleIsRefreshedOnABoundedScheduleNotEveryTick() {
+		link();
+		when(world.getGameTime()).thenReturn(100L);
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.DIAMOND));
+		DropEventBossBarManager.showBar(world, display, guard, false);
+		String first = DropEventBossBarManager.titleOf(guard.getUUID());
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.STICK));
+		when(world.getGameTime()).thenReturn(100L + DropEventBossBarManager.TITLE_REFRESH_TICKS - 1);
+		DropEventBossBarManager.ensureBar(world, display, guard, false);
+		assertEquals(first, DropEventBossBarManager.titleOf(guard.getUUID()));
+		when(world.getGameTime()).thenReturn(100L + DropEventBossBarManager.TITLE_REFRESH_TICKS);
+		DropEventBossBarManager.ensureBar(world, display, guard, false);
+		assertNotEquals(first, DropEventBossBarManager.titleOf(guard.getUUID()));
+		assertTrue(DropEventBossBarManager.titleOf(guard.getUUID()).startsWith("Stick"));
+	}
+
+	@Test void replacementGuardInheritsDisplayState() {
+		link();
+		tags(display).add(DropEventState.TAG_RUNNING);
+		DropEventLinker.inheritState(display, guard);
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		tags(guard).clear();
+		tags(display).clear();
+		tags(display).add(DropEventState.TAG_PAUSED);
+		DropEventLinker.inheritState(display, guard);
+		assertTrue(tags(guard).contains(DropEventState.TAG_PAUSED));
+		tags(guard).clear();
+		tags(display).clear();
+		DropEventLinker.inheritState(display, guard);
+		assertFalse(tags(guard).contains(DropEventState.TAG_RUNNING) || tags(guard).contains(DropEventState.TAG_PAUSED));
 	}
 
 }
