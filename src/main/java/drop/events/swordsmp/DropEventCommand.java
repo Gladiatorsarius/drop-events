@@ -60,9 +60,14 @@ public final class DropEventCommand {
 		}
 	}
 
-	private static int skippedUnloaded;
-
 	private record Target(ServerLevel world, Display.ItemDisplay display, Shulker guard) {}
+
+	/** Eligible targets plus the number of events left alone because their guard is not resolved. */
+	private record Selection(List<Target> targets, int skipped) {
+		String note() {
+			return skipped == 0 ? "" : " Skipped " + skipped + " whose guard is not loaded.";
+		}
+	}
 
 	/**
 	 * Without "all": the nearest eligible event in the source's dimension. With "all": every
@@ -78,14 +83,15 @@ public final class DropEventCommand {
 			}
 
 			List<Target> eligible = new ArrayList<>();
-			skippedUnloaded = 0;
+			int skipped = 0;
 			if (all) {
-				for (ServerLevel world : source.getServer().getAllLevels()) collect(world, action, eligible);
+				for (ServerLevel world : source.getServer().getAllLevels()) skipped += collect(world, action, eligible);
 			} else {
-				collect(here, action, eligible);
+				skipped = collect(here, action, eligible);
 			}
+			Selection selection = new Selection(eligible, skipped);
 			if (eligible.isEmpty()) {
-				source.sendFailure(Component.literal(noTarget(action) + skippedNote()));
+				source.sendFailure(Component.literal(noTarget(action) + selection.note()));
 				return 0;
 			}
 
@@ -117,7 +123,7 @@ public final class DropEventCommand {
 				source.sendFailure(Component.literal("Error: " + firstError + " (" + describe(action, count) + ")"));
 				return done > 0 ? Command.SINGLE_SUCCESS : 0;
 			}
-			source.sendSuccess(() -> Component.literal(describe(action, count) + skippedNote()), true);
+			source.sendSuccess(() -> Component.literal(describe(action, count) + selection.note()), true);
 			return Command.SINGLE_SUCCESS;
 		} catch (Exception e) {
 			context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
@@ -125,16 +131,20 @@ public final class DropEventCommand {
 		}
 	}
 
-	private static void collect(ServerLevel world, Action action, List<Target> out) {
+	/** Adds eligible targets to out and returns how many events were skipped. */
+	private static int collect(ServerLevel world, Action action, List<Target> out) {
+		int skipped = 0;
 		List<Display.ItemDisplay> displays = new ArrayList<>();
 		world.getEntities(EntityType.ITEM_DISPLAY, e -> e.getTags().contains(DropEventLinker.TAG_TRIGGER), displays);
 		for (Display.ItemDisplay display : displays) {
 			UUID shulkerId = DropEventLinker.linkedShulkerUuidFromDisplay(display);
 			Shulker guard = shulkerId != null && world.getEntity(shulkerId) instanceof Shulker s ? s : null;
 			if (action == Action.STOP) {
-				// A guard that is merely unloaded must not be orphaned: leave that event alone.
-				if (guard == null && shulkerId != null && !DropEventLinker.guardChunkLoaded(world, display)) {
-					skippedUnloaded++;
+				// A linked guard that does not resolve may only be loading (chunk border, load order).
+				// Leave that event alone instead of deleting the display and orphaning the guard.
+				// A truly lost guard is cleaned up by the linker after its grace period.
+				if (guard == null && shulkerId != null) {
+					skipped++;
 					continue;
 				}
 				out.add(new Target(world, display, guard));
@@ -142,6 +152,7 @@ public final class DropEventCommand {
 				out.add(new Target(world, display, guard));
 			}
 		}
+		return skipped;
 	}
 
 	private static void apply(Action action, Target t) {
@@ -173,12 +184,9 @@ public final class DropEventCommand {
 					t.guard().discard();
 				}
 				t.display().discard();
+				DropEventLinker.forgetMissing(t.display());
 			}
 		}
-	}
-
-	private static String skippedNote() {
-		return skippedUnloaded == 0 ? "" : " Skipped " + skippedUnloaded + " whose guard chunk is not loaded.";
 	}
 
 	private static String noTarget(Action action) {

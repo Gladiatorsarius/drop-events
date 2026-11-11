@@ -529,7 +529,7 @@ class DropEventRegressionTest {
 		assertNull(DropEventBossBarManager.titleOf(guard.getUUID()));
 	}
 
-	@Test void stopRemovesUntouchedEventAndEventWithMissingGuard() throws Exception {
+	@Test void stopRemovesUntouchedEventAndEventThatNeverGotAGuard() throws Exception {
 		link();
 		CommandSourceStack source = startSource(List.of(display));
 		assertEquals(1, runCommand("stop", source));
@@ -537,9 +537,8 @@ class DropEventRegressionTest {
 		verify(display).discard();
 		verify(world, never()).addFreshEntity(any());
 		Display.ItemDisplay orphan = mock(Display.ItemDisplay.class);
-		trackTags(orphan, "linked_shulker:" + UUID.randomUUID());
+		trackTags(orphan);
 		when(orphan.position()).thenReturn(new Vec3(0, 65, 0));
-		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
 		assertEquals(1, runCommand("stop", startSource(List.of(orphan))));
 		verify(orphan).discard();
 	}
@@ -802,16 +801,61 @@ class DropEventRegressionTest {
 		}
 	}
 
-	@Test void stopSkipsEventWhoseGuardChunkIsNotLoadedInsteadOfOrphaningTheGuard() throws Exception {
+	@Test void stopSkipsEventWhoseLinkedGuardDoesNotResolveEvenInATickingChunk() throws Exception {
 		link();
 		when(world.getEntity(guard.getUUID())).thenReturn(null);
-		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(false);
-		when(display.position()).thenReturn(new Vec3(0, 65, 0));
-		assertEquals(0, runCommand("stop", startSource(List.of(display))));
-		verify(display, never()).discard();
 		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		when(display.position()).thenReturn(new Vec3(0, 65, 0));
+		CommandSourceStack source = startSource(List.of(display));
+		assertEquals(0, runCommand("stop", source));
+		verify(display, never()).discard();
+		verify(source).sendFailure(argThat(c -> c.getString().contains("Skipped 1")));
+		when(world.getEntity(guard.getUUID())).thenReturn(guard);
 		assertEquals(1, runCommand("stop", startSource(List.of(display))));
 		verify(display).discard();
+	}
+
+	@Test void missingCounterDoesNotSurviveDisplayUnloadOrStop() {
+		missingGuardSetup();
+		when(world.isPositionEntityTicking(any(BlockPos.class))).thenReturn(true);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		when(display.getRemovalReason()).thenReturn(Entity.RemovalReason.UNLOADED_TO_CHUNK);
+		ServerEntityEvents.ENTITY_UNLOAD.invoker().onUnload(display, world);
+		ServerEntityEvents.ENTITY_LOAD.invoker().onLoad(display, world);
+		tickTimes(DropEventLinker.MISSING_GUARD_TICKS - 1);
+		verify(display, never()).discard();
+	}
+
+	@Test void barTitleIsRefreshedOnABoundedScheduleNotEveryTick() {
+		link();
+		when(world.getGameTime()).thenReturn(100L);
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.DIAMOND));
+		DropEventBossBarManager.showBar(world, display, guard, false);
+		String first = DropEventBossBarManager.titleOf(guard.getUUID());
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.STICK));
+		when(world.getGameTime()).thenReturn(100L + DropEventBossBarManager.TITLE_REFRESH_TICKS - 1);
+		DropEventBossBarManager.ensureBar(world, display, guard, false);
+		assertEquals(first, DropEventBossBarManager.titleOf(guard.getUUID()));
+		when(world.getGameTime()).thenReturn(100L + DropEventBossBarManager.TITLE_REFRESH_TICKS);
+		DropEventBossBarManager.ensureBar(world, display, guard, false);
+		assertNotEquals(first, DropEventBossBarManager.titleOf(guard.getUUID()));
+		assertTrue(DropEventBossBarManager.titleOf(guard.getUUID()).startsWith("Stick"));
+	}
+
+	@Test void replacementGuardInheritsDisplayState() {
+		link();
+		tags(display).add(DropEventState.TAG_RUNNING);
+		DropEventLinker.inheritState(display, guard);
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		tags(guard).clear();
+		tags(display).clear();
+		tags(display).add(DropEventState.TAG_PAUSED);
+		DropEventLinker.inheritState(display, guard);
+		assertTrue(tags(guard).contains(DropEventState.TAG_PAUSED));
+		tags(guard).clear();
+		tags(display).clear();
+		DropEventLinker.inheritState(display, guard);
+		assertFalse(tags(guard).contains(DropEventState.TAG_RUNNING) || tags(guard).contains(DropEventState.TAG_PAUSED));
 	}
 
 }
