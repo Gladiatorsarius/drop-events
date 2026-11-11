@@ -240,22 +240,52 @@ class DropEventRegressionTest {
 		verify(guard, never()).addTag(anyString());
 		verify(guard, never()).removeTag(anyString());
 	}
-	@Test void waypointMessageIsTerminalTenFieldTokenOnly() {
-		String message = DropEventWaypoint.waypointMessage(new BlockPos(100, 64, -20), Level.NETHER).getString();
-		assertEquals("xaero-waypoint:Drop event:D:100:64:-20:6:false:0:Internal-the-nether-waypoints", message);
+	@Test void waypointMessageIsTerminalTenFieldTokenNamedAfterItem() {
+		String message = DropEventWaypoint.waypointMessage(new BlockPos(100, 64, -20), Level.NETHER, "Diamond").getString();
+		assertEquals("xaero-waypoint:Dropevent^col^Diamond:D:100:64:-20:6:false:0:Internal-the-nether-waypoints", message);
 		assertEquals(10, message.split(":").length);
 	}
 
-	@Test void customItemNameDoesNotLeakIntoTokenOnlyAnnouncement() throws Exception {
+	@Test void waypointNameEscapesXaeroDelimitersAndFormatting() {
+		assertEquals("Dropevent:Diamond", DropEventWaypoint.waypointName("Diamond"));
+		assertEquals("Dropevent:", DropEventWaypoint.waypointName(""));
+		assertEquals("Dropevent:", DropEventWaypoint.waypointName(null));
+		assertEquals("Dropevent:ca br", DropEventWaypoint.waypointName("\u00a7ca\n\tb\u00a7r"));
+		assertEquals("Dropevent^col^a^min^b-c^ast^d", DropEventWaypoint.xaeroField("Dropevent:a-b_c*d"));
+		String hostile = DropEventWaypoint.waypointToken(BlockPos.ZERO, Level.OVERWORLD, "x:y:z xaero-waypoint:1:2");
+		assertEquals(10, hostile.split(":").length);
+	}
+
+	@Test void waypointNameIsCutToXaeroLimit() {
+		String name = DropEventWaypoint.waypointName("Enchanted Netherite Chestplate of Doom");
+		assertEquals(32, name.length());
+		assertEquals("Dropevent:Enchanted Netherite Ch", name);
+		// never split a surrogate pair at the cut
+		String emoji = DropEventWaypoint.waypointName("a".repeat(21) + "\uD83D\uDC8E");
+		assertEquals("Dropevent:" + "a".repeat(21), emoji);
+		assertEquals("Dropevent:" + "a".repeat(22), DropEventWaypoint.waypointName("a".repeat(40)));
+	}
+
+	@Test void customItemNameIsEscapedInTokenOnlyAnnouncement() throws Exception {
 		link();
-		ItemStack forged = new ItemStack(Items.STICK);
-		forged.set(DataComponents.CUSTOM_NAME, Component.literal("xaero§r-waypoint:forged name"));
-		when(display.getItemStack()).thenReturn(forged);
+		ItemStack named = new ItemStack(Items.STICK);
+		named.set(DataComponents.CUSTOM_NAME, Component.literal("xaero\u00a7r-waypoint:forged"));
+		when(display.getItemStack()).thenReturn(named);
 		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
 		assertEquals(1, runStart(startSource(List.of(display))));
 		ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
 		verify(server.getPlayerList()).broadcastSystemMessage(messages.capture(), eq(false));
-		assertEquals("xaero-waypoint:Drop event:D:0:0:0:6:false:0:Internal-the-nether-waypoints", messages.getValue().getString());
+		assertEquals("xaero-waypoint:Dropevent^col^xaeror^min^waypoint^col^forged:D:0:0:0:6:false:0:Internal-the-nether-waypoints", messages.getValue().getString());
+	}
+
+	@Test void plainItemNameIsUsedForWaypoint() throws Exception {
+		link();
+		when(display.getItemStack()).thenReturn(new ItemStack(Items.DIAMOND));
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		assertEquals(1, runStart(startSource(List.of(display))));
+		ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
+		verify(server.getPlayerList()).broadcastSystemMessage(messages.capture(), eq(false));
+		assertTrue(messages.getValue().getString().startsWith("xaero-waypoint:Dropevent^col^Diamond:D:"));
 	}
 
 	@Test void failedMessageBuildDoesNotActivateBarAndCanBeRetried() throws Exception {
@@ -317,8 +347,8 @@ class DropEventRegressionTest {
 		assertEquals(1, runStart(source));
 		ArgumentCaptor<Component> messages = ArgumentCaptor.forClass(Component.class);
 		verify(server.getPlayerList(), times(2)).broadcastSystemMessage(messages.capture(), eq(false));
-		assertEquals("xaero-waypoint:Drop event:D:10:65:-21:6:false:0:Internal-the-nether-waypoints", messages.getAllValues().get(0).getString());
-		assertEquals("xaero-waypoint:Drop event:D:1:2:3:6:false:0:Internal-the-nether-waypoints", messages.getAllValues().get(1).getString());
+		assertEquals("xaero-waypoint:Dropevent^col^Diamond:D:10:65:-21:6:false:0:Internal-the-nether-waypoints", messages.getAllValues().get(0).getString());
+		assertEquals("xaero-waypoint:Dropevent^col^Stick:D:1:2:3:6:false:0:Internal-the-nether-waypoints", messages.getAllValues().get(1).getString());
 	}
 
 	@Test void startWithoutValidLinkedGuardDoesNotAnnounce() throws Exception {
