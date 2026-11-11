@@ -167,6 +167,12 @@ public final class DropEventLinker {
 
 		ensureLinkTag(shulker, TAG_LINKED_DISPLAY_PREFIX, display.getUUID());
 		ensureLinkTag(display, TAG_LINKED_SHULKER_PREFIX, shulker.getUUID());
+		// A replacement guard (the old one is gone) continues the display's lifecycle state. A
+		// running tag with no session start is then paused by the next reconcile.
+		DropEventState.State inherited = DropEventState.of(display);
+		if (inherited != DropEventState.State.UNTOUCHED) {
+			shulker.addTag(inherited == DropEventState.State.RUNNING ? DropEventState.TAG_RUNNING : DropEventState.TAG_PAUSED);
+		}
 
 		world.addFreshEntity(shulker);
 		teleportDisplayToShulker(display, shulker);

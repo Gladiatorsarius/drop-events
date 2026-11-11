@@ -17,7 +17,7 @@ import net.minecraft.world.entity.monster.Shulker;
 
 /** All state is accessed on the server thread and cleared when that server stops. */
 public final class DropEventBossBarManager {
-	private record TrackedBar(Shulker shulker, ServerBossEvent bar) {}
+	private record TrackedBar(Shulker shulker, ServerBossEvent bar, boolean paused) {}
 	private static final Map<UUID, TrackedBar> BARS = new HashMap<>();
 
 	private DropEventBossBarManager() {}
@@ -49,10 +49,14 @@ public final class DropEventBossBarManager {
 		boolean created = tracked == null;
 		if (tracked == null) {
 			ServerBossEvent bar = new ServerBossEvent(title(display, paused), BossEvent.BossBarColor.PURPLE, BossEvent.BossBarOverlay.PROGRESS);
-			tracked = new TrackedBar(shulker, bar);
+			tracked = new TrackedBar(shulker, bar, paused);
 			BARS.put(id, tracked);
 		} else {
 			tracked.bar().setName(title(display, paused));
+			if (tracked.paused() != paused) {
+				tracked = new TrackedBar(tracked.shulker(), tracked.bar(), paused);
+				BARS.put(id, tracked);
+			}
 		}
 		updateProgress(tracked);
 		for (var player : world.getServer().getPlayerList().getPlayers()) tracked.bar().addPlayer(player);
@@ -62,7 +66,8 @@ public final class DropEventBossBarManager {
 	/** Cheap per-tick reconcile: recreates a missing bar or fixes the paused suffix. No announcement. */
 	static void ensureBar(ServerLevel world, Display.ItemDisplay display, Shulker shulker, boolean paused) {
 		TrackedBar tracked = BARS.get(shulker.getUUID());
-		if (tracked == null || !tracked.bar().getName().getString().equals(title(display, paused).getString())) {
+		// No string building on the hot path: only a missing bar or a changed paused flag needs work.
+		if (tracked == null || tracked.paused() != paused) {
 			showBar(world, display, shulker, paused);
 		}
 	}

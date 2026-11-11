@@ -544,6 +544,33 @@ class DropEventRegressionTest {
 		verify(orphan).discard();
 	}
 
+	@Test void startAnnouncesEvenIfAStaleBarExistsForAnUntouchedGuard() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		DropEventBossBarManager.createBossBarForDisplay(world, display, guard);
+		assertEquals(1, runStart(startSource(List.of(display))));
+		verify(server.getPlayerList()).broadcastSystemMessage(any(Component.class), eq(false));
+	}
+
+	@Test void oneFailingEventDoesNotStopTheRestOfAll() throws Exception {
+		link();
+		when(display.blockPosition()).thenReturn(BlockPos.ZERO);
+		Display.ItemDisplay broken = mock(Display.ItemDisplay.class);
+		Shulker brokenGuard = mock(Shulker.class);
+		UUID brokenId = UUID.randomUUID();
+		when(brokenGuard.getUUID()).thenReturn(brokenId);
+		when(broken.getUUID()).thenReturn(UUID.randomUUID());
+		when(broken.getItemStack()).thenThrow(new IllegalStateException("boom"));
+		trackTags(broken, "linked_shulker:" + brokenId);
+		trackTags(brokenGuard, DropEventLinker.TAG_SHULKER);
+		when(world.getEntity(brokenId)).thenReturn(brokenGuard);
+		when(server.getAllLevels()).thenReturn(List.of(world));
+		CommandSourceStack source = startSource(List.of(broken, display));
+		assertEquals(1, runCommand("start all", source));
+		assertTrue(tags(guard).contains(DropEventState.TAG_RUNNING));
+		verify(source).sendFailure(any());
+	}
+
 	@Test void withoutAllOnlyTheNearestEligibleEventIsChanged() throws Exception {
 		link();
 		when(display.position()).thenReturn(new Vec3(100, 65, 100));

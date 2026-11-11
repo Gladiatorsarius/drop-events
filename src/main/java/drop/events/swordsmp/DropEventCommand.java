@@ -102,11 +102,21 @@ public final class DropEventCommand {
 			}
 
 			int done = 0;
+			String firstError = null;
 			for (Target target : targets) {
-				apply(action, target);
-				done++;
+				try {
+					apply(action, target);
+					done++;
+				} catch (Exception e) {
+					// One broken event must not stop the others; report it at the end.
+					if (firstError == null) firstError = String.valueOf(e.getMessage());
+				}
 			}
 			final int count = done;
+			if (firstError != null) {
+				source.sendFailure(Component.literal("Error: " + firstError + " (" + describe(action, count) + ")"));
+				return done > 0 ? Command.SINGLE_SUCCESS : 0;
+			}
 			source.sendSuccess(() -> Component.literal(describe(action, count) + skippedNote()), true);
 			return Command.SINGLE_SUCCESS;
 		} catch (Exception e) {
@@ -142,9 +152,9 @@ public final class DropEventCommand {
 				Component waypoint = DropEventWaypoint.waypointMessage(t.display().blockPosition(), t.world().dimension(),
 					t.display().getItemStack().getHoverName().getString());
 				DropEventState.set(t.display(), t.guard(), DropEventState.State.RUNNING);
-				if (DropEventBossBarManager.showBar(t.world(), t.display(), t.guard(), false)) {
-					t.world().getServer().getPlayerList().broadcastSystemMessage(waypoint, false);
-				}
+				DropEventBossBarManager.showBar(t.world(), t.display(), t.guard(), false);
+				// start only runs on untouched events, so this announces exactly once per start.
+				t.world().getServer().getPlayerList().broadcastSystemMessage(waypoint, false);
 			}
 			case PAUSE -> {
 				DropEventState.set(t.display(), t.guard(), DropEventState.State.PAUSED);
